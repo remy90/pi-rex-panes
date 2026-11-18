@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runSingleAgent } from "./index.ts";
 import { createPaneTransport } from "./pane-transport.ts";
@@ -82,7 +82,7 @@ test.each(["0", "1"])("pane branch launches the documented argv with KEEP=%s", a
 	expect(argv.slice(0, 2)).toEqual(["/usr/bin/env", `PI_REX_PANES_KEEP=${keep}`]);
 	expect(argv.slice(argv.indexOf("--no-session"))).toEqual([
 		"--no-session", "--model", "provider/model", "--thinking", "high", "--tools", "read,bash",
-		"--append-system-prompt", promptFile, "-e", fileURLToPath(new URL("./index.ts", import.meta.url)),
+		"--append-system-prompt", promptFile, "-e", realpathSync(fileURLToPath(new URL("./index.ts", import.meta.url))),
 		"--rex-panes-report", reportFile, "Task: hello",
 	]);
 	expect(prompt).toBe("Inspect carefully.");
