@@ -21,6 +21,22 @@ test.each([false, true])("tailer drains final lines when the child exits, settle
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a failed Rex wait drains the report and returns failure", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tail-wait-fail-"));
+	const file = join(dir, "report");
+	writeFileSync(file, "");
+	const lines: string[] = [];
+	try {
+		const outcome = await tailReport({ file, processLine: (line) => lines.push(line), waitForExit: async () => {
+			appendFileSync(file, '{"type":"message_end"}\n');
+			throw new Error("Rex connection lost");
+		} });
+		expect(outcome).toMatchObject({ settled: false, aborted: false });
+		expect(outcome.error?.message).toContain("Rex connection lost");
+		expect(lines).toEqual(['{"type":"message_end"}']);
+	} finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("abort stops the tailer and its wait process", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "tail-abort-"));
 	const file = join(dir, "report");
