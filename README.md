@@ -2,7 +2,9 @@
 
 A Pi package that adds the `subagent` tool. Run a single agent, parallel tasks, or a chain with isolated child contexts.
 
-Inside Rex, each child runs a full interactive Pi in a split beside the parent. The first child opens to the right at 40%. Concurrent children stack below the most recent open child, and keyboard focus stays with the parent. Outside Rex, children use Pi's headless JSON mode.
+Rex gives each child a full interactive Pi in a split beside the parent. The first child opens to the right at 40%. Concurrent children stack below the most recent open child, and keyboard focus stays with the parent.
+
+Headless JSON mode supports runs from any terminal.
 
 ## Requirements
 
@@ -80,7 +82,7 @@ If `rex wait` returns before the final report, the parent drains the report file
 ```sh
 bun install
 bun test
-bunx tsc --noEmit
+bun run typecheck
 bun pm pack --dry-run
 ```
 

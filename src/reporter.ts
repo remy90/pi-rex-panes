@@ -1,4 +1,5 @@
 import { appendFileSync } from "node:fs";
+import { isFailureStopReason } from "./report-tail.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const REPORT_FLAG = "rex-panes-report";
@@ -38,7 +39,7 @@ export function registerReporter(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 	pi.on("message_end", (event) => {
 		if (!file || settled) return;
 		if (event.message.role === "assistant") {
-			failed = event.message.stopReason === "error" || event.message.stopReason === "aborted";
+			failed = isFailureStopReason(event.message.stopReason);
 		}
 		append({ type: "message_end", message: event.message });
 	});
