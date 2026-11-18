@@ -27,6 +27,7 @@ test.each(cases)("pane branch handles %s", async (_name, kind, status, exitCode)
 		env: { REX_SESSION: "s", REX_BLOCK: "p" }, lookup: () => "rex",
 		runner: async (_binary, args) => {
 			if (args.includes("close")) closed.push(args[5]!);
+			if (args.includes("wait")) return { code: 1, stdout: '{"exit_code":1}', stderr: "" };
 			if (args.includes("split")) {
 				splits++;
 				if (kind === "uncertain") return { code: 0, stdout: "malformed split response", stderr: "" };
@@ -78,7 +79,9 @@ test.each([false, true])("pane cleanup warning reaches parent output after task 
 		(results) => ({ mode: "single", results, isError: false }));
 	expect(result.status).toBe(aborted ? "aborted" : "completed");
 	expect(closes).toBe(2);
-	expect(getResultOutput(result)).toContain("Could not confirm pane unclosed-child closed. It may still be open");
+	const warning = "Warning: Could not confirm pane unclosed-child closed. It may still be open";
+	expect(getResultOutput(result)).toStartWith(warning);
+	expect(getResultOutput({ ...result, warning: undefined }, [result])).toStartWith(warning);
 });
 
 test.each(["0", "1"])("pane branch launches the documented argv with KEEP=%s", async (keep) => {

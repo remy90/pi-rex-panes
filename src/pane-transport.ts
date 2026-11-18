@@ -89,7 +89,7 @@ export function createPaneTransport(deps: {
 							}
 						} catch { /* Retry once; a live pane remains a placement anchor. */ }
 					}
-					if (!closed) outcome.warning = `Could not confirm pane ${id} closed. It may still be open; close it manually.`;
+					if (!closed) outcome.warning = `Warning: Could not confirm pane ${id} closed. It may still be open; close it manually.`;
 				}
 				return outcome;
 			} finally {

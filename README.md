@@ -4,7 +4,7 @@ A Pi package that adds the `subagent` tool. Run a single agent, parallel tasks, 
 
 Rex gives each child a full interactive Pi in a split beside the parent. The first child opens to the right at 40%. Concurrent children stack below the most recent open child, and keyboard focus stays with the parent.
 
-Headless JSON mode supports runs from any terminal.
+The tool selects headless JSON mode when Rex context is unavailable.
 
 ## Requirements
 
@@ -47,7 +47,7 @@ The body is appended to the child's system prompt. Model settings accept `provid
 
 Successful children write their final report and request Pi shutdown. The parent closes their panes. Failures stay open for inspection, including panes whose child crashes during startup. Aborting a task closes its pane. Parent session shutdown also aborts active pane tasks and waits up to five seconds for cleanup.
 
-Set `PI_REX_PANES_KEEP=1` to keep every finished pane open. Task abort closes retained panes too. Rex launches use `--shell=none --keep-open` so process failures remain visible until you close the pane. Retained panes remain anchors for later children.
+Set `PI_REX_PANES_KEEP=1` to keep every finished pane open. Task abort closes retained panes too. Rex launches use `--shell=none --keep-open` so process failures remain visible until you close the pane. Retained panes remain anchors for later children. When both close attempts fail, the result warns that the pane may still be open and includes its block ID for manual cleanup.
 
 Children report `agent_start` when a run begins. If no start record arrives within 60 seconds, the parent returns a failed result and leaves the pane open. This covers startup errors shown only in the child UI and a reporter that fails to load. Runs have no timeout after starting. A timed-out child can still run in its pane; inspect it before retrying the task.
 
@@ -75,7 +75,7 @@ When the parent uses a runtime and CLI script, the child reuses that invocation 
 
 Missing Rex context or a missing executable selects headless mode. A split rejected before the child starts also falls back to headless. An ambiguous split response returns a failed result because the task may already be running in Rex. Without a block ID, cleanup cannot close that pane, including after abort; close it manually.
 
-If `rex wait` returns before the final report, the parent drains the report file and returns a failed result. A Rex connection error can trigger this while the child is running; its pane stays open for inspection.
+The parent drains the report file after a confirmed child exit or pane removal. An exit before the final report returns a failed result and leaves any remaining pane open for inspection. Rex connection failures trigger up to three wait attempts with a short backoff and process-state checks. After those attempts, the parent checks process state once a second. Exit confirmation and the final report end monitoring. Task abort cancels it. A failed state check also checks the pane listing for removal. Report polling continues throughout an outage; a started run stays active while Rex is unreachable.
 
 ## Development
 

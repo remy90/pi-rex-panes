@@ -21,20 +21,24 @@ test.each([false, true])("tailer drains final lines when the child exits, settle
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("a failed Rex wait drains the report and returns failure", async () => {
+test("an exit monitor failure keeps tailing a healthy child's report", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "tail-wait-fail-"));
 	const file = join(dir, "report");
 	writeFileSync(file, "");
 	const lines: string[] = [];
+	let reportTimer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		const outcome = await tailReport({ file, processLine: (line) => lines.push(line), waitForExit: async () => {
-			appendFileSync(file, '{"type":"message_end"}\n');
+		const outcome = await tailReport({ file, pollMs: 2, processLine: (line) => lines.push(line), waitForExit: async () => {
+			appendFileSync(file, '{"type":"agent_start"}\n');
+			reportTimer = setTimeout(() => appendFileSync(file, '{"type":"agent_settled"}\n'), 15);
 			throw new Error("Rex connection lost");
 		} });
-		expect(outcome).toMatchObject({ settled: false, aborted: false });
-		expect(outcome.error?.message).toContain("Rex connection lost");
-		expect(lines).toEqual(['{"type":"message_end"}']);
-	} finally { rmSync(dir, { recursive: true, force: true }); }
+		expect(outcome).toEqual({ settled: true, aborted: false });
+		expect(lines).toEqual(['{"type":"agent_start"}', '{"type":"agent_settled"}']);
+	} finally {
+		if (reportTimer) clearTimeout(reportTimer);
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("a start record in the poll gap cancels the startup deadline for the whole run", async () => {

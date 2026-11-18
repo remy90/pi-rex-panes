@@ -119,7 +119,7 @@ test("two failed close attempts keep the live pane as the next placement anchor"
 	});
 	const outcome = await transport.run({ ...launch, signal: controller.signal });
 	expect(outcome).toMatchObject({ settled: false, aborted: true });
-	expect(outcome?.warning).toBe("Could not confirm pane child closed. It may still be open; close it manually.");
+	expect(outcome?.warning).toBe("Warning: Could not confirm pane child closed. It may still be open; close it manually.");
 	expect(closes).toBe(2);
 	await transport.run(launch);
 	expect(anchors).toEqual(["p", "child"]);
@@ -143,13 +143,41 @@ test.each([
 				if (settled) appendFileSync(file, '{"type":"agent_settled"}\n');
 				return { code: 0, stdout: '{"block_ids":["child"]}', stderr: "" };
 			}
-			return { code: 0, stdout: "", stderr: "" };
+			return { code: 1, stdout: '{"exit_code":1}', stderr: "" };
 		},
 	});
 	const outcome = await transport.run(launch);
 	expect(outcome?.settled).toBe(settled);
 	if (!settled) expect(outcome?.error?.message).toContain("before agent_settled");
 	expect(calls.some((args) => args.includes("close"))).toBe(false);
+});
+
+test.each(["reject", "malformed"])("a healthy child keeps reporting through a Rex %s outage", async (failure) => {
+	let waits = 0;
+	let reportTimer: ReturnType<typeof setTimeout> | undefined;
+	let waitSignal: AbortSignal | undefined;
+	const transport = createPaneTransport({
+		env: { REX_SESSION: "s", REX_BLOCK: "p" }, lookup: () => "rex",
+		runner: async (_binary, args, options) => {
+			if (args.includes("split")) {
+				const file = args[args.indexOf("--rex-panes-report") + 1]!;
+				appendFileSync(file, '{"type":"agent_start"}\n');
+				reportTimer = setTimeout(() => appendFileSync(file, '{"type":"agent_settled"}\n'), 400);
+				return { code: 0, stdout: '{"block_ids":["child"]}', stderr: "" };
+			}
+			if (args.includes("close")) return { code: 0, stdout: "", stderr: "" };
+			waitSignal = options?.signal;
+			if (args.includes("wait")) waits++;
+			if (failure === "reject") throw new Error("Rex disconnected");
+			if (args.includes("ls")) return { code: 1, stdout: "", stderr: "Rex disconnected" };
+			return { code: 0, stdout: "broken response", stderr: "" };
+		},
+	});
+	try {
+		expect(await transport.run(launch)).toEqual({ settled: true, aborted: false });
+		expect(waits).toBeGreaterThan(0);
+		expect(waitSignal?.aborted).toBe(true);
+	} finally { if (reportTimer) clearTimeout(reportTimer); }
 });
 
 test("a live child without agent_start fails within the startup timeout and stays open", async () => {

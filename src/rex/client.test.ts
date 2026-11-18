@@ -23,14 +23,119 @@ test("closePane and waitPane scope every call and forward wait cancellation", as
 	const rex = createRexClient("rex", "s", async (_binary, args, options) => {
 		calls.push(args);
 		if (args.includes("wait")) expect(options?.signal).toBe(signal);
-		return { code: 1, stdout: "exit payload", stderr: "" };
+		return { code: 1, stdout: '{"exit_code":1}', stderr: "" };
 	});
 	await rex.closePane("b");
-	expect(await rex.waitPane("b", { signal })).toEqual({ code: 1, stdout: "exit payload", stderr: "" });
+	await rex.waitPane("b", { signal });
 	expect(calls).toEqual([
 		["--autostart=false", "--timeout", "3s", "block", "close", "b", "-s", "s"],
 		["--autostart=false", "--timeout", "3s", "wait", "b", "-s", "s", "--json"],
 	]);
+});
+
+test.each([
+	{ code: 1, stdout: "", stderr: "connection lost" },
+	{ code: 0, stdout: "not json", stderr: "" },
+	{ code: 0, stdout: '{"exit_code":"0"}', stderr: "" },
+	{ code: null, stdout: '{"exit_code":0}', stderr: "" },
+	new Error("spawn failed"),
+])("waitPane confirms the child is running before re-arming a failed wait: %j", async (failure) => {
+	let waits = 0;
+	let confirmations = 0;
+	const rex = createRexClient("rex", "s", async (_binary, args) => {
+		if (args.includes("wait")) {
+			if (++waits === 1) {
+				if (failure instanceof Error) throw failure;
+				return failure;
+			}
+			return { code: 3, stdout: '{"exit_code":3,"error":"exit status 3"}', stderr: "exit status 3" };
+		}
+		expect(args.slice(3)).toEqual(["block", "call", "-s", "s", "-b", "b", "process"]);
+		confirmations++;
+		return { code: 0, stdout: '{"last_exit":null}', stderr: "" };
+	});
+	await rex.waitPane("b");
+	expect(waits).toBe(2);
+	expect(confirmations).toBe(1);
+});
+
+test.each([0, 1, 3, -1])("waitPane accepts a confirmed child exit with code %s", async (exitCode) => {
+	let calls = 0;
+	const rex = createRexClient("rex", "s", async () => {
+		calls++;
+		return { code: exitCode === -1 ? 1 : exitCode, stdout: JSON.stringify({ exit_code: exitCode }), stderr: "" };
+	});
+	await rex.waitPane("b");
+	expect(calls).toBe(1);
+});
+
+test("waitPane polls process state after its bounded wait retries and confirms an exit", async () => {
+	let waits = 0;
+	let inspections = 0;
+	const rex = createRexClient("rex", "s", async (_binary, args) => {
+		if (args.includes("wait")) {
+			waits++;
+			return { code: 1, stdout: "", stderr: "connection lost" };
+		}
+		inspections++;
+		return { code: 0, stdout: inspections > 3 ? '{"last_exit":{"exit_code":1}}' : '{"last_exit":null}', stderr: "" };
+	});
+	await rex.waitPane("b");
+	expect(waits).toBe(3);
+	expect(inspections).toBe(4);
+});
+
+test("waitPane confirms a removed pane through a successful block listing", async () => {
+	const calls: string[][] = [];
+	const rex = createRexClient("rex", "s", async (_binary, args) => {
+		calls.push(args.slice(3));
+		if (args.includes("ls")) return { code: 0, stdout: "other-pane\n", stderr: "" };
+		return { code: 3, stdout: "", stderr: "block not found" };
+	});
+	await rex.waitPane("b");
+	expect(calls).toEqual([
+		["wait", "b", "-s", "s", "--json"],
+		["block", "call", "-s", "s", "-b", "b", "process"],
+		["block", "ls", "-s", "s", "-q", "--short=false"],
+	]);
+});
+
+test.each([1, 3])("abort stops recovery during the backoff after wait attempt %s", async (abortAfter) => {
+	const controller = new AbortController();
+	let waits = 0;
+	let inspections = 0;
+	let abortTimer: ReturnType<typeof setTimeout> | undefined;
+	const rex = createRexClient("rex", "s", async (_binary, args, options) => {
+		expect(options?.signal).toBe(controller.signal);
+		if (args.includes("wait")) {
+			waits++;
+			return { code: 1, stdout: "", stderr: "connection lost" };
+		}
+		inspections++;
+		if (inspections === abortAfter) abortTimer = setTimeout(() => controller.abort(), 10);
+		return { code: 0, stdout: '{"last_exit":null}', stderr: "" };
+	});
+	try {
+		await expect(rex.waitPane("b", { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+		expect(waits).toBe(abortAfter);
+		expect(inspections).toBe(abortAfter);
+	} finally {
+		if (abortTimer) clearTimeout(abortTimer);
+		controller.abort();
+	}
+});
+
+test.each([false, true])("abort after an in-flight wait returns starts no recovery commands, rejection: %s", async (reject) => {
+	const controller = new AbortController();
+	let calls = 0;
+	const rex = createRexClient("rex", "s", async () => {
+		calls++;
+		controller.abort();
+		if (reject) throw new Error("killed");
+		return { code: null, stdout: "", stderr: "" };
+	});
+	await expect(rex.waitPane("b", { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+	expect(calls).toBe(1);
 });
 
 test.each([

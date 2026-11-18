@@ -22,7 +22,8 @@ export interface ReportOutcome {
 export function tailReport(options: {
 	file: string;
 	processLine: (line: string, event?: ReportEvent) => void;
-	waitForExit: (signal: AbortSignal) => Promise<unknown>;
+	/** Resolves after a confirmed child exit or pane removal. */
+	waitForExit: (signal: AbortSignal) => Promise<void>;
 	signal?: AbortSignal;
 	pollMs?: number;
 	startTimeoutMs?: number;
@@ -88,7 +89,7 @@ export function tailReport(options: {
 		options.signal?.addEventListener("abort", abort, { once: true });
 		try {
 			fd = openSync(options.file, "r");
-			options.waitForExit(waitController.signal).then(() => exited(), exited);
+			options.waitForExit(waitController.signal).then(() => exited(), () => { /* Report polling continues during monitor failures. */ });
 			drain();
 			if (!done) timer = setInterval(() => {
 				try { drain(); } catch (error) { exited(error); }
