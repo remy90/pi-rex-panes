@@ -4,8 +4,20 @@
   "description": "Delegate Pi tasks to agents with isolated contexts.",
   "type": "module",
   "license": "MIT",
+  "author": "remy90",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/remy90/pi-rex-panes.git"
+  },
+  "homepage": "https://github.com/remy90/pi-rex-panes#readme",
+  "bugs": {
+    "url": "https://github.com/remy90/pi-rex-panes/issues"
+  },
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi",
+    "rex",
+    "subagent"
   ],
   "files": [
     "src",
