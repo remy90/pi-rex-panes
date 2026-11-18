@@ -117,7 +117,9 @@ test("two failed close attempts keep the live pane as the next placement anchor"
 			return { code: 0, stdout: "child\n", stderr: "" };
 		},
 	});
-	expect(await transport.run({ ...launch, signal: controller.signal })).toEqual({ settled: false, aborted: true });
+	const outcome = await transport.run({ ...launch, signal: controller.signal });
+	expect(outcome).toMatchObject({ settled: false, aborted: true });
+	expect(outcome?.warning).toBe("Could not confirm pane child closed. It may still be open; close it manually.");
 	expect(closes).toBe(2);
 	await transport.run(launch);
 	expect(anchors).toEqual(["p", "child"]);

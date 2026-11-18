@@ -16,6 +16,7 @@ export interface ReportOutcome {
 	settled: boolean;
 	aborted: boolean;
 	error?: Error;
+	warning?: string;
 }
 
 export function tailReport(options: {
