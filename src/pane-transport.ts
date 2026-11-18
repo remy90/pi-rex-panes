@@ -82,8 +82,14 @@ export function createPaneTransport(deps: {
 				}, signal: controller.signal, startTimeoutMs: parseStartTimeout(env.PI_REX_PANES_START_TIMEOUT_MS),
 				waitForExit: (signal) => rex.waitPane(id, { signal }) });
 				if (outcome.aborted || (outcome.settled && !failed && env.PI_REX_PANES_KEEP !== "1")) {
-					await rex.closePane(id).catch(() => {});
-					placement.forget(id);
+					for (let attempt = 0; attempt < 2; attempt++) {
+						try {
+							if ((await rex.closePane(id)).code === 0) {
+								placement.forget(id);
+								break;
+							}
+						} catch { /* Retry once; a live pane remains a placement anchor. */ }
+					}
 				}
 				return outcome;
 			} finally {

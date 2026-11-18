@@ -72,6 +72,57 @@ test.each(["abort", "shutdown"])("%s during an in-flight split waits for its ID 
 	]);
 });
 
+test.each(["nonzero", "timeout", "reject"])("abort retries a %s close and forgets the pane after success", async (failure) => {
+	const controller = new AbortController();
+	let closes = 0;
+	const anchors: string[] = [];
+	const transport = createPaneTransport({
+		env: { REX_SESSION: "s", REX_BLOCK: "p" }, lookup: () => "rex",
+		runner: async (_binary, args) => {
+			if (args.includes("split")) {
+				anchors.push(args[args.indexOf("-b") + 1]!);
+				controller.abort();
+				const file = args[args.indexOf("--rex-panes-report") + 1]!;
+				appendFileSync(file, '{"type":"agent_settled"}\n');
+				return { code: 0, stdout: '{"block_ids":["child"]}', stderr: "" };
+			}
+			if (args.includes("close") && ++closes === 1) {
+				if (failure === "reject") throw new Error("spawn failed");
+				return { code: failure === "timeout" ? null : 1, stdout: "", stderr: "close failed" };
+			}
+			return { code: 0, stdout: "", stderr: "" };
+		},
+	});
+	expect(await transport.run({ ...launch, signal: controller.signal })).toEqual({ settled: false, aborted: true });
+	expect(closes).toBe(2);
+	await transport.run(launch);
+	expect(anchors).toEqual(["p", "p"]);
+});
+
+test("two failed close attempts keep the live pane as the next placement anchor", async () => {
+	const controller = new AbortController();
+	let closes = 0;
+	const anchors: string[] = [];
+	const transport = createPaneTransport({
+		env: { REX_SESSION: "s", REX_BLOCK: "p", PI_REX_PANES_KEEP: "1" }, lookup: () => "rex",
+		runner: async (_binary, args) => {
+			if (args.includes("split")) {
+				anchors.push(args[args.indexOf("-b") + 1]!);
+				controller.abort();
+				const file = args[args.indexOf("--rex-panes-report") + 1]!;
+				appendFileSync(file, '{"type":"agent_settled"}\n');
+				return { code: 0, stdout: '{"block_ids":["child"]}', stderr: "" };
+			}
+			if (args.includes("close")) { closes++; return { code: 1, stdout: "", stderr: "close failed" }; }
+			return { code: 0, stdout: "child\n", stderr: "" };
+		},
+	});
+	expect(await transport.run({ ...launch, signal: controller.signal })).toEqual({ settled: false, aborted: true });
+	expect(closes).toBe(2);
+	await transport.run(launch);
+	expect(anchors).toEqual(["p", "child"]);
+});
+
 test.each([
 	["assistant error", "error", "0", true],
 	["assistant abort", "aborted", "0", true],
