@@ -88,7 +88,7 @@ bun pm pack --dry-run
 
 ## Credits
 
-The Pi subagent example provides the tool's foundation. Pane routing and child reporting borrow ideas from `pi-subagents` and `pi-rex-subagents`, both MIT-licensed.
+The Pi subagent example provides the tool's foundation. Running each child as a live interactive Pi in Rex follows the idea behind `pi-subagents` (MIT).
 
 ## Source
 
