@@ -14,7 +14,7 @@ test("openPane preserves focus and reads only the first split block ID", async (
 	};
 	const rex = createRexClient("/rex/bin/rex", "session", runner);
 	expect(await rex.openPane({ anchor: "parent", direction: "right", ratio: 40, label: "scout", cwd: "/work", argv: ["pi", "Task: 'hello'\nworld"] })).toBe("child");
-	expect(calls).toEqual([["--autostart=false", "--timeout", "3s", "split", "-s", "session", "-b", "parent", "--split=right", "--ratio", "40", "--focus=false", "--label", "scout", "-c", "/work", "--shell=none", "--json", "--", "pi", "Task: 'hello'\nworld"]]);
+	expect(calls).toEqual([["--autostart=false", "--timeout", "3s", "split", "-s", "session", "-b", "parent", "--split=right", "--ratio", "40", "--focus=false", "--label", "scout", "-c", "/work", "--shell=none", "--keep-open", "--json", "--", "pi", "Task: 'hello'\nworld"]]);
 });
 
 test("closePane and waitPane scope every call and forward wait cancellation", async () => {
@@ -31,6 +31,15 @@ test("closePane and waitPane scope every call and forward wait cancellation", as
 		["--autostart=false", "--timeout", "3s", "block", "close", "b", "-s", "s"],
 		["--autostart=false", "--timeout", "3s", "wait", "b", "-s", "s", "--json"],
 	]);
+});
+
+test.each([
+	{ code: 0, stdout: "not json", stderr: "" },
+	{ code: 0, stdout: '{"block_ids":[]}', stderr: "" },
+	{ code: 1, stdout: "", stderr: "request timed out" },
+])("an ambiguous split result reports that the child may have started", async (result) => {
+	const rex = createRexClient("rex", "s", async () => result);
+	await expect(rex.openPane({ anchor: "p", direction: "right", ratio: 40, label: "s", cwd: "/", argv: ["pi"] })).rejects.toMatchObject({ mayHaveStarted: true });
 });
 
 test("binary lookup checks REX_BIN_DIR before PATH and skips non-executable files", () => {

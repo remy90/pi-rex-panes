@@ -8,6 +8,10 @@ export interface CommandResult {
 
 export type Runner = (binary: string, args: string[], options?: { signal?: AbortSignal }) => Promise<CommandResult>;
 
+export class UncertainPaneLaunch extends Error {
+	readonly mayHaveStarted = true;
+}
+
 export interface PaneOptions {
 	anchor: string;
 	direction: "right" | "below";
@@ -36,13 +40,19 @@ export function createRexClient(binary: string, session: string, runner: Runner 
 			const result = await run([
 				"split", "-s", session, "-b", options.anchor, `--split=${options.direction}`,
 				"--ratio", String(options.ratio), "--focus=false", "--label", options.label,
-				"-c", options.cwd, "--shell=none", "--json", "--", ...options.argv,
+				"-c", options.cwd, "--shell=none", "--keep-open", "--json", "--", ...options.argv,
 			]);
-			if (result.code !== 0) throw new Error(result.stderr || "Rex split failed");
-			const data = JSON.parse(result.stdout);
-			const id: unknown = data.block_ids?.[0];
-			if (typeof id !== "string" || !id) throw new Error("Rex split returned no block ID");
-			return id;
+			if (result.code !== 0) {
+				const message = result.stderr || "Rex split failed";
+				if (/timed?\s*out|timeout/i.test(message)) throw new UncertainPaneLaunch(message);
+				throw new Error(message);
+			}
+			try {
+				const data = JSON.parse(result.stdout);
+				const id: unknown = data.block_ids?.[0];
+				if (typeof id === "string" && id) return id;
+			} catch { /* A successful split may already have launched the child. */ }
+			throw new UncertainPaneLaunch("Rex split returned no usable block ID");
 		},
 	};
 }
