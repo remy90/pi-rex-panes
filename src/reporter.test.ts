@@ -75,10 +75,11 @@ test("reporter handlers append exact message_end and settled records before succ
 	registerReporter(h.pi, {});
 	expect(h.flags).toEqual(["rex-panes-report"]);
 	h.emit("session_start");
+	h.emit("agent_start", { type: "agent_start" });
 	h.emit("message_end", { type: "message_end", message: { role: "user", content: "Task: hello" } });
 	h.emit("message_end", { type: "message_end", message: { role: "assistant", content: [], stopReason: "stop" } });
 	h.emit("agent_settled", { type: "agent_settled", aborted: false });
-	expect(readFileSync(file, "utf8")).toBe('{"type":"message_end","message":{"role":"user","content":"Task: hello"}}\n{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}\n{"type":"agent_settled"}\n');
+	expect(readFileSync(file, "utf8")).toBe('{"type":"agent_start"}\n{"type":"message_end","message":{"role":"user","content":"Task: hello"}}\n{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}\n{"type":"agent_settled"}\n');
 	expect(h.shutdowns).toBe(1);
 	h.emit("session_shutdown");
 });

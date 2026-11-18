@@ -79,7 +79,8 @@ export function createPaneTransport(deps: {
 							failed = ["error", "aborted"].includes(event.message.stopReason);
 						}
 					} catch { /* The result parser handles unrelated output. */ }
-				}, signal: controller.signal, waitForExit: (signal) => rex.waitPane(id, { signal }) });
+				}, signal: controller.signal, startTimeoutMs: parseStartTimeout(env.PI_REX_PANES_START_TIMEOUT_MS),
+				waitForExit: (signal) => rex.waitPane(id, { signal }) });
 				if (outcome.aborted || (outcome.settled && !failed && env.PI_REX_PANES_KEEP !== "1")) {
 					await rex.closePane(id).catch(() => {});
 					placement.forget(id);
@@ -94,6 +95,12 @@ export function createPaneTransport(deps: {
 			}
 		},
 	};
+}
+
+export function parseStartTimeout(value: string | undefined): number {
+	const trimmed = value?.trim() ?? "";
+	const timeout = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+	return timeout >= 1 && timeout <= 2_147_483_647 ? timeout : 60_000;
 }
 
 export type PaneTransport = ReturnType<typeof createPaneTransport>;

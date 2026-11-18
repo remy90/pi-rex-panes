@@ -13,12 +13,15 @@ export function tailReport(options: {
 	waitForExit: (signal: AbortSignal) => Promise<unknown>;
 	signal?: AbortSignal;
 	pollMs?: number;
+	startTimeoutMs?: number;
 }): Promise<ReportOutcome> {
 	return new Promise((resolve) => {
 		const waitController = new AbortController();
 		let done = false;
 		let fd: number | undefined;
 		let timer: ReturnType<typeof setInterval> | undefined;
+		let startTimer: ReturnType<typeof setTimeout> | undefined;
+		let started = false;
 		let offset = 0;
 		let pending = "";
 		const decoder = new StringDecoder("utf8");
@@ -27,6 +30,7 @@ export function tailReport(options: {
 			if (done) return;
 			done = true;
 			if (timer) clearInterval(timer);
+			if (startTimer) clearTimeout(startTimer);
 			options.signal?.removeEventListener("abort", abort);
 			waitController.abort();
 			if (fd !== undefined) closeSync(fd);
@@ -37,7 +41,12 @@ export function tailReport(options: {
 			if (done || !value.trim()) return;
 			options.processLine(value);
 			try {
-				if (JSON.parse(value).type === "agent_settled") finish({ settled: true, aborted: false });
+				const event = JSON.parse(value);
+				if (event.type === "agent_start") {
+					started = true;
+					if (startTimer) clearTimeout(startTimer);
+				}
+				if (event.type === "agent_settled") finish({ settled: true, aborted: false });
 			} catch { /* Ignore incomplete or unrelated records. */ }
 		};
 		const drain = (final = false) => {
@@ -72,6 +81,16 @@ export function tailReport(options: {
 			if (!done) timer = setInterval(() => {
 				try { drain(); } catch (error) { exited(error); }
 			}, options.pollMs ?? 50);
+			if (!done && !started) {
+				const timeout = options.startTimeoutMs ?? 60_000;
+				startTimer = setTimeout(() => {
+					try { drain(); } catch (error) { exited(error); }
+					if (!done && !started) finish({
+						settled: false, aborted: false,
+						error: new Error(`No agent_start within ${timeout} ms. Pane stays open for inspection. Configure PI_REX_PANES_START_TIMEOUT_MS to allow more startup time.`),
+					});
+				}, timeout);
+			}
 		} catch (error) { exited(error); }
 	});
 }

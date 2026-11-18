@@ -37,6 +37,26 @@ test("a failed Rex wait drains the report and returns failure", async () => {
 	} finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a start record in the poll gap cancels the startup deadline for the whole run", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "tail-start-"));
+	const file = join(dir, "report");
+	writeFileSync(file, "");
+	const controller = new AbortController();
+	let finished = false;
+	const lines: string[] = [];
+	try {
+		const pending = tailReport({ file, signal: controller.signal, pollMs: 1000, startTimeoutMs: 10,
+			processLine: (line) => lines.push(line), waitForExit: () => new Promise(() => {}),
+		}).then((outcome) => { finished = true; return outcome; });
+		appendFileSync(file, '{"type":"agent_start"}\n');
+		await Bun.sleep(40);
+		expect(lines).toEqual(['{"type":"agent_start"}']);
+		expect(finished).toBe(false);
+		controller.abort();
+		expect(await pending).toEqual({ settled: false, aborted: true });
+	} finally { controller.abort(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("abort stops the tailer and its wait process", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "tail-abort-"));
 	const file = join(dir, "report");

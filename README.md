@@ -47,6 +47,8 @@ Successful children write their final report and request Pi shutdown. The parent
 
 Set `PI_REX_PANES_KEEP=1` to keep every finished pane open. Task abort closes retained panes too. Rex launches use `--shell=none --keep-open` so process failures remain visible until you close the pane. Retained panes remain anchors for later children.
 
+Children report `agent_start` when a run begins. If no start record arrives within 60 seconds, the parent returns a failed result and leaves the pane open. This covers startup errors shown only in the child UI and a reporter that fails to load. Runs have no timeout after starting. A timed-out child can still run in its pane; inspect it before retrying the task.
+
 Children use `--no-session` and write results to a private temporary report file. The parent removes that file after the task finishes. Reporter handlers load once per child session, even when the package is also installed globally.
 
 ## Environment
@@ -55,6 +57,7 @@ Children use `--no-session` and write results to a private temporary report file
 | --- | --- |
 | `PI_REX_PANES=0` | Force headless children. |
 | `PI_REX_PANES_KEEP=1` | Keep completed and failed panes open. |
+| `PI_REX_PANES_START_TIMEOUT_MS` | Milliseconds to wait for `agent_start`. Default: `60000`. Accepts whole numbers from `1` to `2147483647`; invalid values use the default. |
 | `REX_SESSION`, `REX_BLOCK` | Rex supplies the parent session and block. Both are required for panes. |
 | `REX_BIN_DIR` | Directory to search for `rex` before checking `PATH`. |
 

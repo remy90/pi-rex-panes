@@ -34,6 +34,7 @@ export function registerReporter(pi: ExtensionAPI, env: NodeJS.ProcessEnv = proc
 		claims.set(session, owner);
 		file = flag;
 	});
+	pi.on("agent_start", () => { append({ type: "agent_start" }); });
 	pi.on("message_end", (event) => {
 		if (!file || settled) return;
 		if (event.message.role === "assistant") {

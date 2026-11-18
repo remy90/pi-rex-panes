@@ -1,7 +1,15 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, existsSync, statSync } from "node:fs";
-import { createPaneTransport } from "./pane-transport.ts";
+import { createPaneTransport, parseStartTimeout } from "./pane-transport.ts";
 import type { Runner } from "./rex/client.ts";
+
+test.each([undefined, "", "0", "-1", "1.5", "60s", "Infinity", "2147483648"])("invalid startup timeout %s uses 60 seconds", (value) => {
+	expect(parseStartTimeout(value)).toBe(60_000);
+});
+
+test.each([["1", 1], [" 2000 ", 2000], ["2147483647", 2_147_483_647]] as const)("startup timeout %s accepts milliseconds", (value, expected) => {
+	expect(parseStartTimeout(value)).toBe(expected);
+});
 
 test("pane reports feed processLine from a private file, settle, and clean up", async () => {
 	let file = "";
@@ -90,6 +98,25 @@ test.each([
 	if (!settled) expect(outcome?.error?.message).toContain("before agent_settled");
 	expect(calls.some((args) => args.includes("close"))).toBe(false);
 });
+
+test("a live child without agent_start fails within the startup timeout and stays open", async () => {
+	const calls: string[][] = [];
+	let waitSignal: AbortSignal | undefined;
+	const transport = createPaneTransport({
+		env: { REX_SESSION: "s", REX_BLOCK: "p", PI_REX_PANES_START_TIMEOUT_MS: "15" }, lookup: () => "rex",
+		runner: async (_binary, args, options) => {
+			calls.push(args);
+			if (args.includes("wait")) { waitSignal = options?.signal; return new Promise(() => {}); }
+			return { code: 0, stdout: '{"block_ids":["child"]}', stderr: "" };
+		},
+	});
+	const outcome = await transport.run(launch);
+	expect(outcome).toMatchObject({ settled: false, aborted: false });
+	expect(outcome?.error?.message).toContain("agent_start");
+	expect(outcome?.error?.message).toContain("15 ms");
+	expect(calls.some((args) => args.includes("close"))).toBe(false);
+	expect(waitSignal?.aborted).toBe(true);
+}, 1000);
 
 test("an uncertain split returns failure without selecting the headless fallback", async () => {
 	const transport = createPaneTransport({
