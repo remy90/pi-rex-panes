@@ -63,6 +63,14 @@ Children use `--no-session` and write results to a private temporary report file
 
 Rex starts pane children directly with `--shell=none`, without running shell startup files. Configure provider credentials in Pi or in the environment available to Rex.
 
+The pane child argv follows this shape. Optional arguments appear in brackets:
+
+```text
+/usr/bin/env PI_REX_PANES_KEEP=0|1 pi --no-session [--model m] [--thinking t] [--tools read,bash] [--append-system-prompt <file>] -e <package>/src/index.ts --rex-panes-report <file> "Task: <task>"
+```
+
+When the parent uses a runtime and CLI script, the child reuses that invocation in place of `pi`. Each path and the complete task remain separate argv entries.
+
 Missing Rex context or a missing executable selects headless mode. A split rejected before the child starts also falls back to headless. An ambiguous split response returns a failed result because the task may already be running in Rex. Without a block ID, cleanup cannot close that pane, including after abort; close it manually.
 
 If `rex wait` returns before the final report, the parent drains the report file and returns a failed result. A Rex connection error can trigger this while the child is running; its pane stays open for inspection.

@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPaneTransport, type PaneTransport } from "./pane-transport.ts";
+import { buildChildArgs } from "./child-args.ts";
 import { registerReporter, REPORT_FLAG } from "./reporter.ts";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
@@ -374,7 +375,7 @@ function createUnstartedResult(
 	};
 }
 
-async function runSingleAgent(
+export async function runSingleAgent(
 	panes: PaneTransport,
 	dispatchDefaults: DispatchDefaults,
 	resolvedAgent: ResolvedAgent,
@@ -402,14 +403,12 @@ async function runSingleAgent(
 		);
 	}
 
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	const inheritsDispatchConfig = !agent.model;
 	const model = agent.model ?? dispatchDefaults.model;
-	if (model) args.push("--model", model);
-	if (inheritsDispatchConfig && dispatchDefaults.thinkingLevel) {
-		args.push("--thinking", dispatchDefaults.thinkingLevel);
-	}
-	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+	const childOptions = {
+		model, thinking: inheritsDispatchConfig ? dispatchDefaults.thinkingLevel : undefined,
+		tools: agent.tools, task,
+	};
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
@@ -439,7 +438,6 @@ async function runSingleAgent(
 			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
 			tmpPromptDir = tmp.dir;
 			tmpPromptPath = tmp.filePath;
-			args.push("--append-system-prompt", tmpPromptPath);
 		}
 
 		if (signal?.aborted) {
@@ -448,7 +446,7 @@ async function runSingleAgent(
 			return currentResult;
 		}
 
-		args.push(`Task: ${task}`);
+		const launchOptions = { ...childOptions, promptFile: tmpPromptPath ?? undefined };
 		emitUpdate();
 		let wasAborted = false;
 		const processLine = (line: string) => {
@@ -486,7 +484,7 @@ async function runSingleAgent(
 		};
 
 		const runHeadless = () => new Promise<ProcessOutcome>((resolve) => {
-			const invocation = getPiInvocation(args);
+			const invocation = getPiInvocation(buildChildArgs(launchOptions));
 			let settled = false;
 			let exited = false;
 			let closed = false;
@@ -556,11 +554,9 @@ async function runSingleAgent(
 		const pane = await panes.run({
 			label: `pi-${agentName}-${crypto.randomUUID()}`, cwd: effectiveCwd, signal, processLine,
 			argv: (file) => {
-				const childArgs = [
-					...args.slice(3, -1), "-e", fs.realpathSync(fileURLToPath(import.meta.url)),
-					`--${REPORT_FLAG}`, file, args.at(-1)!,
-				];
-				const invocation = getPiInvocation(childArgs);
+				const invocation = getPiInvocation(buildChildArgs({
+					...launchOptions, pane: { extensionPath: fs.realpathSync(fileURLToPath(import.meta.url)), reportFile: file },
+				}));
 				return [invocation.command, ...invocation.args];
 			},
 		});
