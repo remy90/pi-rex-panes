@@ -178,6 +178,7 @@ interface SingleResult {
 	effort?: string;
 	stopReason?: string;
 	errorMessage?: string;
+	warning?: string;
 	terminationSignal?: NodeJS.Signals;
 	step?: number;
 }
@@ -231,8 +232,10 @@ function getFailureSummary(result: SingleResult): string {
 	);
 }
 
-function getResultOutput(result: SingleResult): string {
-	return isFailedResult(result) ? getFailureEvidence(result) : getFinalOutput(result.messages) || "(no output)";
+export function getResultOutput(result: SingleResult, previousResults: SingleResult[] = []): string {
+	const output = isFailedResult(result) ? getFailureEvidence(result) : getFinalOutput(result.messages) || "(no output)";
+	const warnings = [...previousResults, result].flatMap((r) => r.warning ? [r.warning] : []);
+	return [...warnings, output].join("\n\n");
 }
 
 function truncateParallelOutput(output: string): string {
@@ -560,6 +563,7 @@ export async function runSingleAgent(
 				return [invocation.command, ...invocation.args];
 			},
 		});
+		currentResult.warning = pane?.warning;
 		wasAborted ||= pane?.aborted ?? false;
 		const outcome: ProcessOutcome = pane
 			? { code: pane.settled ? 0 : 1, signal: null, errorMessage: pane.error?.message }
@@ -863,7 +867,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 
 					const isError = isFailedResult(result);
 					if (isError) {
-						const errorMsg = getResultOutput(result);
+						const errorMsg = getResultOutput(result, results.slice(0, -1));
 						return {
 							content: [
 								{
@@ -880,7 +884,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 					content: [
 						{
 							type: "text",
-							text: truncateModelOutput(getFinalOutput(results[results.length - 1].messages) || "(no output)"),
+							text: truncateModelOutput(getResultOutput(results[results.length - 1], results.slice(0, -1))),
 						},
 					],
 					details: makeDetails("chain")(results),
@@ -1008,7 +1012,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 					content: [
 						{
 							type: "text",
-							text: truncateModelOutput(getFinalOutput(result.messages) || "(no output)"),
+							text: truncateModelOutput(getResultOutput(result)),
 						},
 					],
 					details: makeDetails("single")([result]),
@@ -1113,6 +1117,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 					if (isRunning) header += ` ${theme.fg("warning", `[${r.status}]`)}`;
 					else if (isError) header += ` ${theme.fg("error", `[${r.stopReason ?? r.status}]`)}`;
 					container.addChild(new Text(header, 0, 0));
+					if (r.warning) container.addChild(new Text(theme.fg("warning", r.warning), 0, 0));
 					if (isError && r.errorMessage)
 						container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
 					if (r.terminationSignal)
@@ -1158,6 +1163,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
 					if (displayItems.length > COLLAPSED_ITEM_COUNT) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
 				}
+				if (r.warning) text += `\n${theme.fg("warning", r.warning)}`;
 				const usageStr = formatUsageStats(r.usage, r.model, r.effort);
 				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
 				return new Text(text, 0, 0);
@@ -1219,6 +1225,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 								0,
 							),
 						);
+						if (r.warning) container.addChild(new Text(theme.fg("warning", r.warning), 0, 0));
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
 						if (isFailedResult(r) && r.errorMessage)
 							container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
@@ -1268,6 +1275,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 					const rIcon = resultIcon(r);
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+					if (r.warning) text += `\n${theme.fg("warning", r.warning)}`;
 					if (displayItems.length === 0) {
 						const failed = isFailedResult(r);
 						const summary = failed ? getFailureSummary(r) : "(no output)";
@@ -1314,6 +1322,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 						container.addChild(
 							new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
 						);
+						if (r.warning) container.addChild(new Text(theme.fg("warning", r.warning), 0, 0));
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
 						if (isFailedResult(r) && r.errorMessage)
 							container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
@@ -1359,6 +1368,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 					const rIcon = resultIcon(r);
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
+					if (r.warning) text += `\n${theme.fg("warning", r.warning)}`;
 					if (displayItems.length === 0) {
 						const failed = isFailedResult(r);
 						let summary = "(no output)";

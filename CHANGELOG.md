@@ -11,4 +11,5 @@
 - Close panes on abort and clean up active pane tasks when the parent session shuts down.
 - Preserve headless execution outside Rex and support `PI_REX_PANES=0`.
 - Fail pane runs that report no `agent_start` within 60 seconds, with `PI_REX_PANES_START_TIMEOUT_MS` to adjust the wait.
-- Retry failed pane closes once and retain open panes as placement anchors.
+- Retry failed pane closes once and retain open panes as placement anchors. Include the block ID in a warning when closure remains unconfirmed.
+- Recover from Rex wait failures with bounded retries and process-state checks while child reports continue.

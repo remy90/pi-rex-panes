@@ -1,4 +1,11 @@
 import { spawn } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
+
+const WAIT_ATTEMPTS = 3;
+
+function hasExitCode(payload: unknown): boolean {
+	return typeof payload === "object" && payload !== null && "exit_code" in payload && Number.isInteger(payload.exit_code);
+}
 
 export interface CommandResult {
 	code: number | null;
@@ -24,17 +31,51 @@ export interface PaneOptions {
 export function createRexClient(binary: string, session: string, runner: Runner = runCommand) {
 	const run = (args: string[], options?: { signal?: AbortSignal }) =>
 		runner(binary, ["--autostart=false", "--timeout", "3s", ...args], options);
+	const listPaneIds = async (options?: { signal?: AbortSignal }): Promise<Set<string>> => {
+		const result = await run(["block", "ls", "-s", session, "-q", "--short=false"], options);
+		if (result.code !== 0) throw new Error(result.stderr || "Rex block listing failed");
+		return new Set(result.stdout.split(/\s+/).filter(Boolean));
+	};
 	return {
-		async listPaneIds(): Promise<Set<string>> {
-			const result = await run(["block", "ls", "-s", session, "-q", "--short=false"]);
-			if (result.code !== 0) throw new Error(result.stderr || "Rex block listing failed");
-			return new Set(result.stdout.split(/\s+/).filter(Boolean));
-		},
+		listPaneIds,
 		closePane(blockId: string) {
 			return run(["block", "close", blockId, "-s", session]);
 		},
-		waitPane(blockId: string, options?: { signal?: AbortSignal }) {
-			return run(["wait", blockId, "-s", session, "--json"], options);
+		async waitPane(blockId: string, options?: { signal?: AbortSignal }): Promise<void> {
+			const signal = options?.signal;
+			let attempts = 0;
+			while (true) {
+				signal?.throwIfAborted();
+				if (attempts < WAIT_ATTEMPTS) {
+					attempts++;
+					try {
+						const result = await run(["wait", blockId, "-s", session, "--json"], options);
+						signal?.throwIfAborted();
+						if (result.code !== null && hasExitCode(JSON.parse(result.stdout))) return;
+					} catch { /* Confirm the child state after a failed wait. */ }
+				}
+				signal?.throwIfAborted();
+				let running = false;
+				try {
+					const result = await run(["block", "call", "-s", session, "-b", blockId, "process"], options);
+					signal?.throwIfAborted();
+					if (result.code === 0) {
+						const data = JSON.parse(result.stdout);
+						if (hasExitCode(data?.last_exit)) return;
+						running = data?.last_exit === null;
+					}
+				} catch { /* Keep monitoring while Rex is unavailable. */ }
+				signal?.throwIfAborted();
+				if (!running) {
+					try {
+						const ids = await listPaneIds(options);
+						signal?.throwIfAborted();
+						if (!ids.has(blockId)) return;
+					} catch { /* An unreachable server gives no evidence of exit. */ }
+				}
+				signal?.throwIfAborted();
+				await sleep(attempts < WAIT_ATTEMPTS ? attempts * 100 : 1000, undefined, { signal });
+			}
 		},
 		async openPane(options: PaneOptions): Promise<string> {
 			const result = await run([

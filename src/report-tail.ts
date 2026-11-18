@@ -1,16 +1,29 @@
 import { closeSync, openSync, readSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 
+export const DEFAULT_START_TIMEOUT_MS = 60_000;
+
+export function isFailureStopReason(reason: unknown): boolean {
+	return reason === "error" || reason === "aborted";
+}
+
+export interface ReportEvent {
+	type?: string;
+	message?: { role?: string; stopReason?: unknown };
+}
+
 export interface ReportOutcome {
 	settled: boolean;
 	aborted: boolean;
 	error?: Error;
+	warning?: string;
 }
 
 export function tailReport(options: {
 	file: string;
-	processLine: (line: string) => void;
-	waitForExit: (signal: AbortSignal) => Promise<unknown>;
+	processLine: (line: string, event?: ReportEvent) => void;
+	/** Resolves after a confirmed child exit or pane removal. */
+	waitForExit: (signal: AbortSignal) => Promise<void>;
 	signal?: AbortSignal;
 	pollMs?: number;
 	startTimeoutMs?: number;
@@ -39,15 +52,15 @@ export function tailReport(options: {
 		const abort = () => finish({ settled: false, aborted: true });
 		const line = (value: string) => {
 			if (done || !value.trim()) return;
-			options.processLine(value);
-			try {
-				const event = JSON.parse(value);
-				if (event.type === "agent_start") {
-					started = true;
-					if (startTimer) clearTimeout(startTimer);
-				}
-				if (event.type === "agent_settled") finish({ settled: true, aborted: false });
-			} catch { /* Ignore incomplete or unrelated records. */ }
+			let event: ReportEvent | undefined;
+			try { event = JSON.parse(value) ?? undefined; }
+			catch { /* Ignore incomplete or unrelated records. */ }
+			options.processLine(value, event);
+			if (event?.type === "agent_start") {
+				started = true;
+				if (startTimer) clearTimeout(startTimer);
+			}
+			if (event?.type === "agent_settled") finish({ settled: true, aborted: false });
 		};
 		const drain = (final = false) => {
 			if (done || fd === undefined) return;
@@ -76,13 +89,13 @@ export function tailReport(options: {
 		options.signal?.addEventListener("abort", abort, { once: true });
 		try {
 			fd = openSync(options.file, "r");
-			options.waitForExit(waitController.signal).then(() => exited(), exited);
+			options.waitForExit(waitController.signal).then(() => exited(), () => { /* Report polling continues during monitor failures. */ });
 			drain();
 			if (!done) timer = setInterval(() => {
 				try { drain(); } catch (error) { exited(error); }
 			}, options.pollMs ?? 50);
 			if (!done && !started) {
-				const timeout = options.startTimeoutMs ?? 60_000;
+				const timeout = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
 				startTimer = setTimeout(() => {
 					try { drain(); } catch (error) { exited(error); }
 					if (!done && !started) finish({

@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRexClient, UncertainPaneLaunch, type Runner } from "./rex/client.ts";
 import { findRex } from "./rex/lookup.ts";
-import { createPlacement } from "./rex/placement.ts";
-import { tailReport, type ReportOutcome } from "./report-tail.ts";
+import { createPlacement, type Placement } from "./rex/placement.ts";
+import { DEFAULT_START_TIMEOUT_MS, isFailureStopReason, tailReport, type ReportOutcome } from "./report-tail.ts";
 
 interface PaneLaunch {
 	label: string;
@@ -21,7 +21,7 @@ export function createPaneTransport(deps: {
 	shutdownGraceMs?: number;
 } = {}) {
 	const env = deps.env ?? process.env;
-	const placements = new Map<string, ReturnType<typeof createPlacement>>();
+	const placements = new Map<string, Placement>();
 	const active = new Map<AbortController, Promise<void>>();
 	return {
 		async shutdown() {
@@ -71,25 +71,25 @@ export function createPaneTransport(deps: {
 					return undefined;
 				}
 				let failed = false;
-				const outcome = await tailReport({ file, processLine: (line) => {
+				const outcome = await tailReport({ file, processLine: (line, event) => {
 					options.processLine(line);
-					try {
-						const event = JSON.parse(line);
-						if (event.type === "message_end" && event.message?.role === "assistant") {
-							failed = ["error", "aborted"].includes(event.message.stopReason);
-						}
-					} catch { /* The result parser handles unrelated output. */ }
+					if (event?.type === "message_end" && event.message?.role === "assistant") {
+						failed = isFailureStopReason(event.message.stopReason);
+					}
 				}, signal: controller.signal, startTimeoutMs: parseStartTimeout(env.PI_REX_PANES_START_TIMEOUT_MS),
 				waitForExit: (signal) => rex.waitPane(id, { signal }) });
 				if (outcome.aborted || (outcome.settled && !failed && env.PI_REX_PANES_KEEP !== "1")) {
+					let closed = false;
 					for (let attempt = 0; attempt < 2; attempt++) {
 						try {
 							if ((await rex.closePane(id)).code === 0) {
 								placement.forget(id);
+								closed = true;
 								break;
 							}
 						} catch { /* Retry once; a live pane remains a placement anchor. */ }
 					}
+					if (!closed) outcome.warning = `Warning: Could not confirm pane ${id} closed. It may still be open; close it manually.`;
 				}
 				return outcome;
 			} finally {
@@ -106,7 +106,7 @@ export function createPaneTransport(deps: {
 export function parseStartTimeout(value: string | undefined): number {
 	const trimmed = value?.trim() ?? "";
 	const timeout = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
-	return timeout >= 1 && timeout <= 2_147_483_647 ? timeout : 60_000;
+	return timeout >= 1 && timeout <= 2_147_483_647 ? timeout : DEFAULT_START_TIMEOUT_MS;
 }
 
 export type PaneTransport = ReturnType<typeof createPaneTransport>;

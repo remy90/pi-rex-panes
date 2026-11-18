@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, existsSync, readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { runSingleAgent } from "./index.ts";
+import { getResultOutput, runSingleAgent } from "./index.ts";
 import { createPaneTransport } from "./pane-transport.ts";
 import type { AgentConfig } from "./agents.ts";
 
@@ -27,6 +27,7 @@ test.each(cases)("pane branch handles %s", async (_name, kind, status, exitCode)
 		env: { REX_SESSION: "s", REX_BLOCK: "p" }, lookup: () => "rex",
 		runner: async (_binary, args) => {
 			if (args.includes("close")) closed.push(args[5]!);
+			if (args.includes("wait")) return { code: 1, stdout: '{"exit_code":1}', stderr: "" };
 			if (args.includes("split")) {
 				splits++;
 				if (kind === "uncertain") return { code: 0, stdout: "malformed split response", stderr: "" };
@@ -54,6 +55,33 @@ test.each(cases)("pane branch handles %s", async (_name, kind, status, exitCode)
 	if (kind === "error") expect(result.errorMessage).toBe("Provider rejected prompt");
 	if (kind === "uncertain") expect(result.errorMessage).toContain("no usable block ID");
 	if (kind === "exit") expect(result.errorMessage).toContain("before agent_settled");
+});
+
+test.each([false, true])("pane cleanup warning reaches parent output after task abort: %s", async (aborted) => {
+	const controller = new AbortController();
+	let closes = 0;
+	const transport = createPaneTransport({
+		env: { REX_SESSION: "s", REX_BLOCK: "p" }, lookup: () => "rex",
+		runner: async (_binary, args) => {
+			if (args.includes("split")) {
+				if (aborted) controller.abort();
+				const file = args[args.indexOf("--rex-panes-report") + 1]!;
+				appendFileSync(file, '{"type":"agent_settled"}\n');
+				return { code: 0, stdout: '{"block_ids":["unclosed-child"]}', stderr: "" };
+			}
+			if (args.includes("wait")) return new Promise(() => {});
+			closes++;
+			return { code: 1, stdout: "", stderr: "close failed" };
+		},
+	});
+	const result = await runSingleAgent(transport, {}, { agent, available: [agent], cwd: process.cwd() },
+		"scout", "hello", undefined, controller.signal, undefined,
+		(results) => ({ mode: "single", results, isError: false }));
+	expect(result.status).toBe(aborted ? "aborted" : "completed");
+	expect(closes).toBe(2);
+	const warning = "Warning: Could not confirm pane unclosed-child closed. It may still be open";
+	expect(getResultOutput(result)).toStartWith(warning);
+	expect(getResultOutput({ ...result, warning: undefined }, [result])).toStartWith(warning);
 });
 
 test.each(["0", "1"])("pane branch launches the documented argv with KEEP=%s", async (keep) => {
