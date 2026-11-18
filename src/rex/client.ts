@@ -44,7 +44,7 @@ export function createRexClient(binary: string, session: string, runner: Runner 
 			]);
 			if (result.code !== 0) {
 				const message = result.stderr || "Rex split failed";
-				if (/timed?\s*out|timeout/i.test(message)) throw new UncertainPaneLaunch(message);
+				if (result.code === null || /timed?\s*out|timeout/i.test(message)) throw new UncertainPaneLaunch(message);
 				throw new Error(message);
 			}
 			try {

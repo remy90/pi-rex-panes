@@ -37,6 +37,7 @@ test.each([
 	{ code: 0, stdout: "not json", stderr: "" },
 	{ code: 0, stdout: '{"block_ids":[]}', stderr: "" },
 	{ code: 1, stdout: "", stderr: "request timed out" },
+	{ code: null, stdout: "", stderr: "" },
 ])("an ambiguous split result reports that the child may have started", async (result) => {
 	const rex = createRexClient("rex", "s", async () => result);
 	await expect(rex.openPane({ anchor: "p", direction: "right", ratio: 40, label: "s", cwd: "/", argv: ["pi"] })).rejects.toMatchObject({ mayHaveStarted: true });
