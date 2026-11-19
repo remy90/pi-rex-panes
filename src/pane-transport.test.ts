@@ -26,7 +26,7 @@ test("pane reports feed processLine from a private file, settle, and clean up", 
 			return new Promise(() => {});
 		}
 		if (args.includes("session.view")) return { code: 0, stdout: '{"active_window_id":"w","windows":[{"window_id":"w","focused_block_id":"p"}]}', stderr: "" };
-		expect(args.slice(args.indexOf("--") + 1, args.indexOf("--") + 4)).toEqual(["/usr/bin/env", "PI_REX_PANES_KEEP=0", "pi"]);
+		expect(args.slice(args.indexOf("--") + 1, args.indexOf("--") + 4)).toEqual(["/usr/bin/env", `PI_REX_PANES_PARENT_PID=${process.pid}`, "pi"]);
 		file = args[args.indexOf("--rex-panes-report") + 1];
 		expect(statSync(file).mode & 0o777).toBe(0o600);
 		appendFileSync(file, '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}\n{"type":"agent_settled"}\n');
@@ -345,7 +345,7 @@ test.each([
 		runner: async (_binary, args) => {
 			calls.push(args);
 			if (args.includes("split")) {
-				expect(args).toContain(`PI_REX_PANES_KEEP=${keep}`);
+				expect(args).toContain(`PI_REX_PANES_PARENT_PID=${process.pid}`);
 				const file = args[args.indexOf("--rex-panes-report") + 1]!;
 				if (stopReason) appendFileSync(file, `${JSON.stringify({ type: "message_end", message: { role: "assistant", stopReason } })}\n`);
 				if (settled) appendFileSync(file, '{"type":"agent_settled"}\n');

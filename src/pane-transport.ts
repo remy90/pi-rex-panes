@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createRexClient, UncertainPaneLaunch, type RexClient, type Runner } from "./rex/client.ts";
 import { findRex } from "./rex/lookup.ts";
 import { createPlacement, type Placement } from "./rex/placement.ts";
+import { PARENT_PID_ENV } from "./reporter.ts";
 import { DEFAULT_START_TIMEOUT_MS, isFailureStopReason, tailReport, type ReportOutcome } from "./report-tail.ts";
 
 interface PaneLaunch {
@@ -151,7 +152,7 @@ export function createPaneTransport(deps: {
 				let id: string;
 				try {
 					id = await placement.open({ label: options.label, cwd: options.cwd,
-						argv: ["/usr/bin/env", `PI_REX_PANES_KEEP=${env.PI_REX_PANES_KEEP === "1" ? "1" : "0"}`, ...options.argv(file)],
+						argv: ["/usr/bin/env", `${PARENT_PID_ENV}=${process.pid}`, ...options.argv(file)],
 					}, controller.signal);
 				} catch (error) {
 					if (controller.signal.aborted) return { settled: false, aborted: true };
