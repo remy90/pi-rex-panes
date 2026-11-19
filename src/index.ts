@@ -646,9 +646,7 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
 	registerReporter(pi);
-	const panes = createPaneTransport({
-		settings: () => (pi.getSettings() as any)?.rexPanes,
-	} as Parameters<typeof createPaneTransport>[0]); // The linger workstream adds the settings dependency.
+	const panes = createPaneTransport({ settings: () => (pi.getSettings() as any)?.rexPanes });
 	const inspector = registerInspector(pi);
 	registerOwnership(pi, PACKAGE_ROOT, () => registerSubagent(pi, panes), inspector.registered);
 	pi.on("session_shutdown", async () => {
