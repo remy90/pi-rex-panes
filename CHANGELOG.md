@@ -11,7 +11,7 @@
 ### Changed
 
 - Return tool results as soon as the child settles. Successful panes linger for 180 seconds by default, with focus extending the delay until 30 seconds after focus leaves. The parent checks focus every 5 seconds.
-- Let the parent close successful children and clean up lingering panes during session shutdown. A child checks for parent exit every 2 seconds and shuts down if the parent dies. `PI_REX_PANES_KEEP=1` retains finished panes until parent exit.
+- Let the parent close successful children and clean up lingering panes during session shutdown. A child checks for parent exit every 2 seconds and shuts down if the parent dies. `PI_REX_PANES_KEEP=1` retains finished panes indefinitely, including after parent exit.
 - Limit close-failure warnings in tool results to task aborts. Background linger cleanup failures produce no warning.
 
 ## [0.1.0]

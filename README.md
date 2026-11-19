@@ -67,11 +67,11 @@ Set `rexPanes.lingerSeconds` in Pi's `settings.json` to change the delay:
 }
 ```
 
-A non-empty `PI_REX_PANES_LINGER_SECONDS` overrides that setting. When the environment variable is unset or blank, the parent reads `rexPanes.lingerSeconds`, then uses 180 seconds if absent. Values must be whole numbers from `0` to `2147483`. An invalid value uses 180 seconds, including an invalid environment override when a valid setting exists. Set `0` to close straight away, including while focused. `PI_REX_PANES_KEEP=1` keeps finished panes open until the parent exits.
+A non-empty `PI_REX_PANES_LINGER_SECONDS` overrides that setting. When the environment variable is unset or blank, the parent reads `rexPanes.lingerSeconds`, then uses 180 seconds if absent. Values must be whole numbers from `0` to `2147483`. An invalid value uses 180 seconds, including an invalid environment override when a valid setting exists. Set `0` to close straight away, including while focused. `PI_REX_PANES_KEEP=1` keeps finished panes open indefinitely, including after the parent exits.
 
-Failed panes stay open for inspection, including panes whose child crashes during startup. Aborting a task closes its pane, including with `PI_REX_PANES_KEEP=1`. Parent session shutdown aborts active pane tasks and closes lingering panes, with up to five seconds for cleanup.
+Failed panes stay open for inspection, including panes whose child crashes during startup. Aborting a task closes its pane, including with `PI_REX_PANES_KEEP=1`. Parent session shutdown aborts active pane tasks and closes lingering panes, with up to five seconds for cleanup. Completed panes retained with `PI_REX_PANES_KEEP=1` stay open.
 
-Each child checks every 2 seconds whether its parent process still exists, including after a forced parent exit. When the parent is gone, a child that settled successfully tries to close its own pane. The watchdog aborts a running child before requesting shutdown. Settled children shut down even if Rex cannot close their pane. Failed or unfinished runs, including aborted runs, leave their final screen visible through `--keep-open`. A failed close can also leave a completed pane on screen.
+Each child checks every 2 seconds whether its parent process still exists, including after a forced parent exit. When the parent is gone, a child that settled successfully tries to close its own pane unless `PI_REX_PANES_KEEP=1`. With KEEP enabled, the child shuts down and leaves the pane open through `--keep-open`. The watchdog aborts a running child before requesting shutdown. Settled children shut down even if Rex cannot close their pane. Failed or unfinished runs, including aborted runs, leave their final screen visible through `--keep-open`. A failed close can also leave a completed pane on screen.
 
 Rex launches use `--shell=none --keep-open` to leave process failures visible until you close the pane. An open pane remains an anchor for later children. After a failed close, the parent retries once and includes the block ID in a warning if task abort cleanup still fails. Linger cleanup runs silently, with another attempt during session shutdown.
 
@@ -84,7 +84,7 @@ Children use `--no-session` and write results to a private temporary report file
 | Variable | Effect |
 | --- | --- |
 | `PI_REX_PANES=0` | Force headless children. |
-| `PI_REX_PANES_KEEP=1` | Keep finished child panes open until the parent exits, overriding linger. Task abort still closes its pane. |
+| `PI_REX_PANES_KEEP=1` | Keep finished child panes open indefinitely, including after parent exit, overriding linger. Task abort still closes its pane. |
 | `PI_REX_PANES_LINGER_SECONDS` | Seconds successful child panes linger. Default: `180`. Overrides `rexPanes.lingerSeconds` when non-empty. Accepts whole numbers from `0` to `2147483`; invalid values use the default. `0` closes straight away. |
 | `PI_REX_PANES_START_TIMEOUT_MS` | Milliseconds to wait for `agent_start`. Default: `60000`. Accepts whole numbers from `1` to `2147483647`; invalid values use the default. |
 | `REX_SESSION`, `REX_BLOCK` | Rex supplies the parent session and block. Both are required for panes. |
@@ -95,7 +95,7 @@ Rex starts pane children directly with `--shell=none`, without running shell sta
 The pane child argv follows this shape. Optional arguments appear in brackets:
 
 ```text
-/usr/bin/env PI_REX_PANES_PARENT_PID=<parent-pid> pi --no-session [--model m] [--thinking t] [--tools read,bash] [--append-system-prompt <file>] -e <package>/src/index.ts --rex-panes-report <file> "Task: <task>"
+/usr/bin/env PI_REX_PANES_KEEP=0|1 PI_REX_PANES_PARENT_PID=<parent-pid> pi --no-session [--model m] [--thinking t] [--tools read,bash] [--append-system-prompt <file>] -e <package>/src/index.ts --rex-panes-report <file> "Task: <task>"
 ```
 
 When the parent uses a runtime and CLI script, the child reuses that invocation in place of `pi`. Each path and the complete task remain separate argv entries.
