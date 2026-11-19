@@ -25,6 +25,7 @@ interface LingeringPane {
 	rex: RexClient;
 	placement: Placement;
 	timer?: unknown;
+	stopped?: boolean;
 	closing?: Promise<boolean>;
 }
 
@@ -65,8 +66,13 @@ export function createPaneTransport(deps: {
 	const timers = deps.timers ?? defaultTimers;
 	const close = (pane: LingeringPane): Promise<boolean> => {
 		if (!pane.closing) {
+			pane.stopped = true;
 			if (pane.timer !== undefined) timers.clearTimeout(pane.timer);
-			pane.closing = closePane(pane.id, pane.rex, pane.placement).finally(() => { lingering.delete(pane); });
+			pane.closing = closePane(pane.id, pane.rex, pane.placement).then((closed) => {
+				if (closed) lingering.delete(pane);
+				else pane.closing = undefined;
+				return closed;
+			});
 		}
 		return pane.closing;
 	};
@@ -89,7 +95,7 @@ export function createPaneTransport(deps: {
 		let unfocusedSince: number | undefined;
 		const check = async () => {
 			const focused = await rex.focusedBlockId().catch(() => undefined);
-			if (pane.closing) return;
+			if (pane.stopped) return;
 			if (focused === id) {
 				postponed = true;
 				unfocusedSince = undefined;

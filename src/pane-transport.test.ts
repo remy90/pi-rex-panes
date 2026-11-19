@@ -158,6 +158,23 @@ test("a lingering pane anchors the next split until it closes", async () => {
 	expect(h.anchors).toEqual(["p", "child", "p"]);
 });
 
+test("shutdown retries a failed background close and the pane stays an anchor until closed", async () => {
+	const h = lingerHarness();
+	h.state.closeCode = 1;
+	await h.transport.run(launch);
+	await h.clock.advance(180_000);
+	expect(h.closed).toEqual(["child", "child"]);
+	expect(h.clock.pending).toBe(0);
+	await h.transport.run(launch);
+	expect(h.anchors).toEqual(["p", "child"]);
+	h.state.closeCode = 0;
+	await h.transport.shutdown();
+	expect(h.closed).toEqual(["child", "child", "child", "child-2"]);
+	await h.transport.run(launch);
+	expect(h.anchors).toEqual(["p", "child", "p"]);
+	await h.transport.shutdown();
+});
+
 test("shutdown closes every lingering pane and cancels focus checks", async () => {
 	const h = lingerHarness();
 	h.state.focused = "child";
@@ -459,6 +476,7 @@ function lingerHarness(config: Omit<NonNullable<Parameters<typeof createPaneTran
 		views: 0,
 		viewGate: undefined as Promise<void> | undefined,
 		closeGate: undefined as Promise<void> | undefined,
+		closeCode: 0,
 	};
 	const transport = createPaneTransport({
 		...config, env: { REX_SESSION: "s", REX_BLOCK: "p", ...config.env }, lookup: () => "rex", timers: clock,
@@ -481,6 +499,7 @@ function lingerHarness(config: Omit<NonNullable<Parameters<typeof createPaneTran
 			if (args.includes("close")) {
 				closed.push(args[5]!);
 				await state.closeGate;
+				if (state.closeCode !== 0) return { code: state.closeCode, stdout: "", stderr: "close failed" };
 				live.delete(args[5]!);
 			}
 			return { code: 0, stdout: [...live].join("\n"), stderr: "" };
