@@ -90,7 +90,7 @@ test.each([false, true])("pane cleanup warning reaches parent output after task 
 	}
 });
 
-test.each(["0", "1"])("pane branch launches the documented argv with KEEP=%s", async (keep) => {
+test.each(["0", "1"])("pane branch forwards KEEP=%s and the parent PID in child argv", async (keep) => {
 	let promptFile = "";
 	let prompt = "";
 	let reportFile = "";
@@ -113,7 +113,7 @@ test.each(["0", "1"])("pane branch launches the documented argv with KEEP=%s", a
 		{ agent, available: [agent], cwd: process.cwd() }, "scout", "hello", undefined, undefined, undefined,
 		(results) => ({ mode: "single", results, isError: false }));
 	expect(result.status).toBe("completed");
-	expect(argv.slice(0, 2)).toEqual(["/usr/bin/env", `PI_REX_PANES_KEEP=${keep}`]);
+	expect(argv.slice(0, 3)).toEqual(["/usr/bin/env", `PI_REX_PANES_KEEP=${keep}`, `PI_REX_PANES_PARENT_PID=${process.pid}`]);
 	expect(argv.slice(argv.indexOf("--no-session"))).toEqual([
 		"--no-session", "--model", "provider/model", "--thinking", "high", "--tools", "read,bash",
 		"--append-system-prompt", promptFile, "-e", realpathSync(fileURLToPath(new URL("./index.ts", import.meta.url))),

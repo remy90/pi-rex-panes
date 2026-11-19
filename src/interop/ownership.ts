@@ -34,7 +34,7 @@ export function registerOwnership(
 		const owner = foreignSubagentOwner(pi, packageRoot);
 		if (!owner || !ctx.hasUI) return;
 		const guidance = owner.split(/[\\/]/).includes("pi-subagents")
-			? fleetAvailable() ? "Fleet opens runs in Rex splits." : "The Rex Fleet inspector is unavailable."
+			? fleetAvailable() ? "Fleet opens runs in Rex splits." : "The Rex inspector is unavailable outside Rex."
 			: "Remove that extension to use pi-rex-panes' subagent.";
 		ctx.ui.notify(`pi-rex-panes is standing down: ${owner} owns subagent. ${guidance}`, "info");
 	});

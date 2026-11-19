@@ -54,6 +54,33 @@ test.each([
 	await expect(rex.focusedBlockId()).rejects.toBeInstanceOf(Error);
 });
 
+test.each([
+	[0, '{"last_exit":null}', "running"],
+	[0, '{"last_exit":{"exit_code":0}}', "exited"],
+	[0, '{"last_exit":{"exit_code":1}}', "exited"],
+	[0, '{"last_exit":{"exit_code":"0"}}', "unknown"],
+	[0, '{}', "unknown"],
+	[1, '{"last_exit":{"exit_code":0}}', "unknown"],
+	[null, '{"last_exit":null}', "unknown"],
+] as const)("paneProcess reads process state from code %s and %s", async (code, stdout, state) => {
+	const signal = new AbortController().signal;
+	const rex = createRexClient("rex", "s", async (binary, args, options) => {
+		expect(binary).toBe("rex");
+		expect(args).toEqual(["--autostart=false", "--timeout", "3s", "block", "call", "-s", "s", "-b", "b", "process"]);
+		expect(options?.signal).toBe(signal);
+		return { code, stdout, stderr: "" };
+	});
+	expect(await rex.paneProcess("b", { signal })).toBe(state);
+});
+
+test("focusPane scopes focus to its session", async () => {
+	const rex = createRexClient("rex", "s", async (_binary, args) => {
+		expect(args).toEqual(["--autostart=false", "--timeout", "3s", "block", "focus", "b", "-s", "s"]);
+		return { code: 0, stdout: "", stderr: "" };
+	});
+	expect((await rex.focusPane("b")).code).toBe(0);
+});
+
 test("closePane and waitPane scope every call and forward wait cancellation", async () => {
 	const calls: string[][] = [];
 	const signal = new AbortController().signal;

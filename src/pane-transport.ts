@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { createRexClient, UncertainPaneLaunch, type RexClient, type Runner } from "./rex/client.ts";
 import { findRex } from "./rex/lookup.ts";
 import { createPlacement, type Placement } from "./rex/placement.ts";
+import { withinGrace } from "./grace.ts";
+import { PARENT_PID_ENV } from "./reporter.ts";
 import { DEFAULT_START_TIMEOUT_MS, isFailureStopReason, tailReport, type ReportOutcome } from "./report-tail.ts";
+
+export const DEFAULT_LINGER_SECONDS = 180;
+export const MAX_LINGER_SECONDS = 2_147_483;
+const UNFOCUSED_CLOSE_MS = 30_000;
+const FOCUS_POLL_MS = 5_000;
 
 interface PaneLaunch {
 	label: string;
@@ -84,9 +91,7 @@ export function createPaneTransport(deps: {
 			try { value = deps.settings?.()?.lingerSeconds; }
 			catch { /* Use the default when settings cannot be read. */ }
 		}
-		const seconds = typeof value === "number" ? value
-			: typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : NaN;
-		const delay = Number.isInteger(seconds) && seconds >= 0 && seconds <= 2_147_483 ? seconds * 1_000 : 180_000;
+		const delay = parseLingerSeconds(value) * 1_000;
 		if (delay === 0) {
 			void close(pane);
 			return;
@@ -101,12 +106,12 @@ export function createPaneTransport(deps: {
 				unfocusedSince = undefined;
 			} else {
 				unfocusedSince ??= timers.now();
-				if (!postponed || timers.now() - unfocusedSince >= 30_000) {
+				if (!postponed || timers.now() - unfocusedSince >= UNFOCUSED_CLOSE_MS) {
 					void close(pane);
 					return;
 				}
 			}
-			pane.timer = timers.setTimeout(() => { void check(); }, 5_000);
+			pane.timer = timers.setTimeout(() => { void check(); }, FOCUS_POLL_MS);
 		};
 		pane.timer = timers.setTimeout(() => { void check(); }, delay);
 	};
@@ -115,15 +120,10 @@ export function createPaneTransport(deps: {
 			const running = [...active.entries()];
 			for (const [controller] of running) controller.abort();
 			const closing = [...lingering].map(close);
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			try {
-				await Promise.race([
-					Promise.allSettled([...running.map(([, finished]) => finished), ...closing]),
-					new Promise<void>((resolve) => { timer = setTimeout(resolve, deps.shutdownGraceMs ?? 5000); }),
-				]);
-			} finally {
-				if (timer) clearTimeout(timer);
-			}
+			await withinGrace(
+				Promise.allSettled([...running.map(([, finished]) => finished), ...closing]),
+				deps.shutdownGraceMs,
+			);
 		},
 		async run(options: PaneLaunch): Promise<ReportOutcome | undefined> {
 			if (env.PI_REX_PANES === "0" || !env.REX_SESSION || !env.REX_BLOCK) return undefined;
@@ -151,7 +151,7 @@ export function createPaneTransport(deps: {
 				let id: string;
 				try {
 					id = await placement.open({ label: options.label, cwd: options.cwd,
-						argv: ["/usr/bin/env", `PI_REX_PANES_KEEP=${env.PI_REX_PANES_KEEP === "1" ? "1" : "0"}`, ...options.argv(file)],
+						argv: ["/usr/bin/env", `PI_REX_PANES_KEEP=${env.PI_REX_PANES_KEEP === "1" ? "1" : "0"}`, `${PARENT_PID_ENV}=${process.pid}`, ...options.argv(file)],
 					}, controller.signal);
 				} catch (error) {
 					if (controller.signal.aborted) return { settled: false, aborted: true };
@@ -181,6 +181,13 @@ export function createPaneTransport(deps: {
 			}
 		},
 	};
+}
+
+export function parseLingerSeconds(value: unknown): number {
+	const seconds = typeof value === "number" ? value
+		: typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : NaN;
+	return Number.isInteger(seconds) && seconds >= 0 && seconds <= MAX_LINGER_SECONDS
+		? seconds : DEFAULT_LINGER_SECONDS;
 }
 
 export function parseStartTimeout(value: string | undefined): number {
