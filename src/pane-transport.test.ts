@@ -25,18 +25,137 @@ test("pane reports feed processLine from a private file, settle, and clean up", 
 			waitSignal = options?.signal;
 			return new Promise(() => {});
 		}
+		if (args.includes("session.view")) return { code: 0, stdout: '{"active_window_id":"w","windows":[{"window_id":"w","focused_block_id":"p"}]}', stderr: "" };
 		expect(args.slice(args.indexOf("--") + 1, args.indexOf("--") + 4)).toEqual(["/usr/bin/env", "PI_REX_PANES_KEEP=0", "pi"]);
 		file = args[args.indexOf("--rex-panes-report") + 1];
 		expect(statSync(file).mode & 0o777).toBe(0o600);
 		appendFileSync(file, '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}\n{"type":"agent_settled"}\n');
 		return { code: 0, stdout: '{"block_ids":["child","parent"]}', stderr: "" };
 	};
-	const transport = createPaneTransport({ env: { REX_SESSION: "s", REX_BLOCK: "p" }, lookup: () => "rex", runner });
+	const clock = fakeClock();
+	const transport = createPaneTransport({ env: { REX_SESSION: "s", REX_BLOCK: "p" }, lookup: () => "rex", runner, timers: clock });
 	expect(await transport.run({ ...launch, processLine: (line) => lines.push(line) })).toEqual({ settled: true, aborted: false });
 	expect(lines).toHaveLength(2);
-	expect(closed).toEqual(["child"]);
+	expect(closed).toEqual([]);
 	expect(waitSignal?.aborted).toBe(true);
 	expect(existsSync(file)).toBe(false);
+	await clock.advance(179_999);
+	expect(closed).toEqual([]);
+	await clock.advance(1);
+	expect(closed).toEqual(["child"]);
+});
+
+test.each([
+	["2", 4, 2_000, 0],
+	[" 3 ", 4, 3_000, 0],
+	["0", 4, 0, 0],
+	[undefined, 2, 2_000, 1],
+	["", "3", 3_000, 1],
+	[" \t ", 4, 4_000, 1],
+	[undefined, 0, 0, 1],
+	["invalid", 1, 180_000, 0],
+	["-1", 1, 180_000, 0],
+	["1.5", 1, 180_000, 0],
+	["Infinity", 1, 180_000, 0],
+	["2147484", 1, 180_000, 0],
+	[undefined, -1, 180_000, 1],
+	[undefined, 1.5, 180_000, 1],
+	[undefined, Infinity, 180_000, 1],
+	[undefined, "invalid", 180_000, 1],
+	[undefined, null, 180_000, 1],
+	[undefined, false, 180_000, 1],
+	[undefined, {}, 180_000, 1],
+	[undefined, undefined, 180_000, 1],
+] as const)("linger env %s and setting %s close after %s ms", async (env, setting, delay, reads) => {
+	let settingsReads = 0;
+	const h = lingerHarness({
+		env: { PI_REX_PANES_LINGER_SECONDS: env },
+		settings: () => { settingsReads++; return { lingerSeconds: setting }; },
+	});
+	await h.transport.run(launch);
+	expect(settingsReads).toBe(reads);
+	if (delay > 0) {
+		await h.clock.advance(delay - 1);
+		expect(h.closed).toEqual([]);
+		await h.clock.advance(1);
+	} else await flush();
+	expect(h.closed).toEqual(["child"]);
+	if (delay === 0) expect(h.state.views).toBe(0);
+});
+
+test("focus postpones closing until the pane has been unfocused for 30 seconds", async () => {
+	const h = lingerHarness();
+	h.state.focused = "child";
+	await h.transport.run(launch);
+	await h.clock.advance(240_000);
+	expect(h.closed).toEqual([]);
+	h.state.focused = "p";
+	await h.clock.advance(5_000);
+	await h.clock.advance(29_999);
+	expect(h.closed).toEqual([]);
+	await h.clock.advance(1);
+	expect(h.closed).toEqual(["child"]);
+});
+
+test("returning focus restarts the consecutive unfocused window", async () => {
+	const h = lingerHarness();
+	h.state.focused = "child";
+	await h.transport.run(launch);
+	await h.clock.advance(180_000);
+	h.state.focused = undefined;
+	await h.clock.advance(30_000);
+	expect(h.closed).toEqual([]);
+	h.state.focused = "child";
+	await h.clock.advance(5_000);
+	h.state.focused = "p";
+	await h.clock.advance(34_999);
+	expect(h.closed).toEqual([]);
+	await h.clock.advance(1);
+	expect(h.closed).toEqual(["child"]);
+});
+
+test.each([false, true])("a failed focus read counts as unfocused, postponed: %s", async (postponed) => {
+	const h = lingerHarness();
+	h.state.focused = postponed ? "child" : new Error("Rex unavailable");
+	await h.transport.run(launch);
+	await h.clock.advance(180_000);
+	if (postponed) {
+		expect(h.closed).toEqual([]);
+		h.state.focused = new Error("Rex unavailable");
+		await h.clock.advance(34_999);
+		expect(h.closed).toEqual([]);
+		await h.clock.advance(1);
+	}
+	expect(h.closed).toEqual(["child"]);
+});
+
+test("KEEP=1 skips the linger timer even when linger is zero", async () => {
+	const h = lingerHarness({ env: { PI_REX_PANES_KEEP: "1", PI_REX_PANES_LINGER_SECONDS: "0" } });
+	await h.transport.run(launch);
+	expect(h.clock.pending).toBe(0);
+	await h.clock.advance(1_000_000);
+	expect(h.closed).toEqual([]);
+	expect(h.state.views).toBe(0);
+});
+
+test("a throwing settings getter falls back to the default linger", async () => {
+	const h = lingerHarness({ settings: () => { throw new Error("settings unavailable"); } });
+	await h.transport.run(launch);
+	await h.clock.advance(179_999);
+	expect(h.closed).toEqual([]);
+	await h.clock.advance(1);
+	expect(h.closed).toEqual(["child"]);
+});
+
+test("a lingering pane anchors the next split until it closes", async () => {
+	const h = lingerHarness();
+	await h.transport.run(launch);
+	await h.transport.run(launch);
+	expect(h.anchors).toEqual(["p", "child"]);
+	await h.clock.advance(180_000);
+	expect(h.closed).toEqual(["child", "child-2"]);
+	await h.transport.run(launch);
+	expect(h.anchors).toEqual(["p", "child", "p"]);
 });
 
 test.each(["abort", "shutdown"])("%s during an in-flight split waits for its ID and closes the pane", async (action) => {
@@ -257,6 +376,71 @@ test("shutdown returns after its grace period when pane cleanup hangs", async ()
 	release();
 	expect(await child).toEqual({ settled: false, aborted: true });
 });
+
+function lingerHarness(config: Omit<NonNullable<Parameters<typeof createPaneTransport>[0]>, "runner" | "timers" | "lookup"> = {}) {
+	const clock = fakeClock();
+	const closed: string[] = [];
+	const anchors: string[] = [];
+	const live = new Set<string>();
+	const state = { focused: "p" as string | Error | undefined, views: 0 };
+	const transport = createPaneTransport({
+		...config, env: { REX_SESSION: "s", REX_BLOCK: "p", ...config.env }, lookup: () => "rex", timers: clock,
+		runner: async (_binary, args) => {
+			if (args.includes("split")) {
+				anchors.push(args[args.indexOf("-b") + 1]!);
+				const file = args[args.indexOf("--rex-panes-report") + 1]!;
+				appendFileSync(file, '{"type":"agent_settled"}\n');
+				const id = anchors.length === 1 ? "child" : `child-${anchors.length}`;
+				live.add(id);
+				return { code: 0, stdout: JSON.stringify({ block_ids: [id] }), stderr: "" };
+			}
+			if (args.includes("session.view")) {
+				state.views++;
+				if (state.focused instanceof Error) throw state.focused;
+				return { code: 0, stdout: JSON.stringify({ active_window_id: "w", windows: [{ window_id: "w", focused_block_id: state.focused }] }), stderr: "" };
+			}
+			if (args.includes("wait")) return new Promise(() => {});
+			if (args.includes("close")) {
+				closed.push(args[5]!);
+				live.delete(args[5]!);
+			}
+			return { code: 0, stdout: [...live].join("\n"), stderr: "" };
+		},
+	});
+	return { transport, clock, closed, anchors, state };
+}
+
+function fakeClock() {
+	let now = 0;
+	let nextId = 0;
+	const pending = new Map<number, { at: number; callback: () => void }>();
+	return {
+		now: () => now,
+		setTimeout(callback: () => void, ms: number): unknown {
+			const id = ++nextId;
+			pending.set(id, { at: now + ms, callback });
+			return id;
+		},
+		clearTimeout(id: unknown) { pending.delete(id as number); },
+		async advance(ms: number) {
+			const until = now + ms;
+			while (true) {
+				const next = [...pending].sort((a, b) => a[1].at - b[1].at).find(([, timer]) => timer.at <= until);
+				if (!next) break;
+				const [id, timer] = next;
+				now = timer.at;
+				pending.delete(id);
+				timer.callback();
+				await flush();
+			}
+			now = until;
+			await flush();
+		},
+		get pending() { return pending.size; },
+	};
+}
+
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 const launch = { label: "scout", cwd: "/work", argv: (file: string) => ["pi", "--no-session", "--rex-panes-report", file, "Task: hello"], processLine() {} };
 
