@@ -17,6 +17,43 @@ test("openPane preserves focus and reads only the first split block ID", async (
 	expect(calls).toEqual([["--autostart=false", "--timeout", "3s", "split", "-s", "session", "-b", "parent", "--split=right", "--ratio", "40", "--focus=false", "--label", "scout", "-c", "/work", "--shell=none", "--keep-open", "--json", "--", "pi", "Task: 'hello'\nworld"]]);
 });
 
+test("focusedBlockId reads the active window from a recorded session.view shape", async () => {
+	// Recorded session.view excerpt with IDs replaced and unrelated blocks omitted.
+	const view = {
+		revision: 180,
+		session_id: "session:example",
+		active_window_id: "window:example",
+		windows: [
+			{ window_id: "window:background", focused_block_id: "block:background", layers: [], blocks: [] },
+			{ window_id: "window:example", focused_block_id: "block:focused", layers: [], blocks: [{ block_id: "block:focused" }] },
+		],
+	};
+	const rex = createRexClient("/rex/bin/rex", "session:example", async (binary, args) => {
+		expect(binary).toBe("/rex/bin/rex");
+		expect(args).toEqual(["--autostart=false", "--timeout", "3s", "api", "call", "session.view", "-s", "session:example"]);
+		return { code: 0, stdout: JSON.stringify(view), stderr: "" };
+	});
+	expect(await rex.focusedBlockId()).toBe("block:focused");
+});
+
+test.each([
+	{},
+	{ active_window_id: "missing", windows: [{ window_id: "other", focused_block_id: "block:other" }] },
+	{ active_window_id: "w", windows: [null, { window_id: "w", focused_block_id: 42 }] },
+])("focusedBlockId returns undefined when the active window has no focus: %j", async (view) => {
+	const rex = createRexClient("rex", "s", async () => ({ code: 0, stdout: JSON.stringify(view), stderr: "" }));
+	expect(await rex.focusedBlockId()).toBeUndefined();
+});
+
+test.each([
+	{ code: 1, stdout: "{}", stderr: "view unavailable" },
+	{ code: null, stdout: "{}", stderr: "timeout" },
+	{ code: 0, stdout: "not JSON", stderr: "" },
+])("focusedBlockId rejects an unreadable view: %j", async (result) => {
+	const rex = createRexClient("rex", "s", async () => result);
+	await expect(rex.focusedBlockId()).rejects.toBeInstanceOf(Error);
+});
+
 test("closePane and waitPane scope every call and forward wait cancellation", async () => {
 	const calls: string[][] = [];
 	const signal = new AbortController().signal;

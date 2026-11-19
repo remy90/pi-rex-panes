@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRexClient, UncertainPaneLaunch, type Runner } from "./rex/client.ts";
+import { createRexClient, UncertainPaneLaunch, type RexClient, type Runner } from "./rex/client.ts";
 import { findRex } from "./rex/lookup.ts";
 import { createPlacement, type Placement } from "./rex/placement.ts";
 import { DEFAULT_START_TIMEOUT_MS, isFailureStopReason, tailReport, type ReportOutcome } from "./report-tail.ts";
@@ -14,23 +14,111 @@ interface PaneLaunch {
 	signal?: AbortSignal;
 }
 
+interface LingerTimers {
+	now(): number;
+	setTimeout(callback: () => void, ms: number): unknown;
+	clearTimeout(handle: unknown): void;
+}
+
+interface LingeringPane {
+	id: string;
+	rex: RexClient;
+	placement: Placement;
+	timer?: unknown;
+	stopped?: boolean;
+	closing?: Promise<boolean>;
+}
+
+const defaultTimers: LingerTimers = {
+	now: () => Date.now(),
+	setTimeout(callback, ms) {
+		const timer = setTimeout(callback, ms);
+		timer.unref();
+		return timer;
+	},
+	clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+async function closePane(id: string, rex: RexClient, placement: Placement): Promise<boolean> {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			if ((await rex.closePane(id)).code === 0) {
+				placement.forget(id);
+				return true;
+			}
+		} catch { /* Retry once; a live pane remains a placement anchor. */ }
+	}
+	return false;
+}
+
 export function createPaneTransport(deps: {
 	env?: NodeJS.ProcessEnv;
 	lookup?: typeof findRex;
 	runner?: Runner;
 	shutdownGraceMs?: number;
+	timers?: LingerTimers;
+	settings?: () => { lingerSeconds?: unknown } | undefined;
 } = {}) {
 	const env = deps.env ?? process.env;
 	const placements = new Map<string, Placement>();
 	const active = new Map<AbortController, Promise<void>>();
+	const lingering = new Set<LingeringPane>();
+	const timers = deps.timers ?? defaultTimers;
+	const close = (pane: LingeringPane): Promise<boolean> => {
+		if (!pane.closing) {
+			pane.stopped = true;
+			if (pane.timer !== undefined) timers.clearTimeout(pane.timer);
+			pane.closing = closePane(pane.id, pane.rex, pane.placement).then((closed) => {
+				if (closed) lingering.delete(pane);
+				else pane.closing = undefined;
+				return closed;
+			});
+		}
+		return pane.closing;
+	};
+	const linger = (id: string, rex: RexClient, placement: Placement) => {
+		const pane: LingeringPane = { id, rex, placement };
+		lingering.add(pane);
+		let value: unknown = env.PI_REX_PANES_LINGER_SECONDS?.trim();
+		if (!value) {
+			try { value = deps.settings?.()?.lingerSeconds; }
+			catch { /* Use the default when settings cannot be read. */ }
+		}
+		const seconds = typeof value === "number" ? value
+			: typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : NaN;
+		const delay = Number.isInteger(seconds) && seconds >= 0 && seconds <= 2_147_483 ? seconds * 1_000 : 180_000;
+		if (delay === 0) {
+			void close(pane);
+			return;
+		}
+		let postponed = false;
+		let unfocusedSince: number | undefined;
+		const check = async () => {
+			const focused = await rex.focusedBlockId().catch(() => undefined);
+			if (pane.stopped) return;
+			if (focused === id) {
+				postponed = true;
+				unfocusedSince = undefined;
+			} else {
+				unfocusedSince ??= timers.now();
+				if (!postponed || timers.now() - unfocusedSince >= 30_000) {
+					void close(pane);
+					return;
+				}
+			}
+			pane.timer = timers.setTimeout(() => { void check(); }, 5_000);
+		};
+		pane.timer = timers.setTimeout(() => { void check(); }, delay);
+	};
 	return {
 		async shutdown() {
 			const running = [...active.entries()];
 			for (const [controller] of running) controller.abort();
+			const closing = [...lingering].map(close);
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				await Promise.race([
-					Promise.allSettled(running.map(([, finished]) => finished)),
+					Promise.allSettled([...running.map(([, finished]) => finished), ...closing]),
 					new Promise<void>((resolve) => { timer = setTimeout(resolve, deps.shutdownGraceMs ?? 5000); }),
 				]);
 			} finally {
@@ -78,18 +166,10 @@ export function createPaneTransport(deps: {
 					}
 				}, signal: controller.signal, startTimeoutMs: parseStartTimeout(env.PI_REX_PANES_START_TIMEOUT_MS),
 				waitForExit: (signal) => rex.waitPane(id, { signal }) });
-				if (outcome.aborted || (outcome.settled && !failed && env.PI_REX_PANES_KEEP !== "1")) {
-					let closed = false;
-					for (let attempt = 0; attempt < 2; attempt++) {
-						try {
-							if ((await rex.closePane(id)).code === 0) {
-								placement.forget(id);
-								closed = true;
-								break;
-							}
-						} catch { /* Retry once; a live pane remains a placement anchor. */ }
-					}
-					if (!closed) outcome.warning = `Warning: Could not confirm pane ${id} closed. It may still be open; close it manually.`;
+				if (outcome.aborted || controller.signal.aborted) {
+					if (!await closePane(id, rex, placement)) outcome.warning = `Warning: Could not confirm pane ${id} closed. It may still be open; close it manually.`;
+				} else if (outcome.settled && !failed && env.PI_REX_PANES_KEEP !== "1") {
+					linger(id, rex, placement);
 				}
 				return outcome;
 			} finally {

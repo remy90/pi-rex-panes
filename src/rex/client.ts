@@ -38,6 +38,15 @@ export function createRexClient(binary: string, session: string, runner: Runner 
 	};
 	return {
 		listPaneIds,
+		async focusedBlockId(): Promise<string | undefined> {
+			const result = await run(["api", "call", "session.view", "-s", session]);
+			if (result.code !== 0) throw new Error(result.stderr || "Rex session view failed");
+			const view = JSON.parse(result.stdout);
+			const window = Array.isArray(view?.windows)
+				? view.windows.find((window: { window_id?: unknown } | null) => window?.window_id === view.active_window_id)
+				: undefined;
+			return typeof window?.focused_block_id === "string" ? window.focused_block_id : undefined;
+		},
 		closePane(blockId: string) {
 			return run(["block", "close", blockId, "-s", session]);
 		},
