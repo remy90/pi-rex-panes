@@ -108,10 +108,11 @@ export function createPaneTransport(deps: {
 		async shutdown() {
 			const running = [...active.entries()];
 			for (const [controller] of running) controller.abort();
+			const closing = [...lingering].map(close);
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				await Promise.race([
-					Promise.allSettled(running.map(([, finished]) => finished)),
+					Promise.allSettled([...running.map(([, finished]) => finished), ...closing]),
 					new Promise<void>((resolve) => { timer = setTimeout(resolve, deps.shutdownGraceMs ?? 5000); }),
 				]);
 			} finally {

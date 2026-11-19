@@ -158,6 +158,78 @@ test("a lingering pane anchors the next split until it closes", async () => {
 	expect(h.anchors).toEqual(["p", "child", "p"]);
 });
 
+test("shutdown closes every lingering pane and cancels focus checks", async () => {
+	const h = lingerHarness();
+	h.state.focused = "child";
+	await h.transport.run(launch);
+	await h.clock.advance(180_000);
+	await h.transport.run(launch);
+	await h.transport.shutdown();
+	expect(h.closed).toEqual(["child", "child-2"]);
+	expect(h.clock.pending).toBe(0);
+	const reads = h.state.views;
+	await h.clock.advance(1_000_000);
+	expect(h.state.views).toBe(reads);
+	expect(h.closed).toHaveLength(2);
+});
+
+test("shutdown during a focus read closes immediately and prevents rescheduling", async () => {
+	const h = lingerHarness();
+	let release!: () => void;
+	h.state.viewGate = new Promise<void>((resolve) => { release = resolve; });
+	h.state.focused = "child";
+	await h.transport.run(launch);
+	await h.clock.advance(180_000);
+	expect(h.state.views).toBe(1);
+	await h.transport.shutdown();
+	expect(h.closed).toEqual(["child"]);
+	release();
+	await flush();
+	expect(h.clock.pending).toBe(0);
+	await h.clock.advance(1_000_000);
+	expect(h.state.views).toBe(1);
+	expect(h.closed).toHaveLength(1);
+});
+
+test("zero linger returns the result while close is pending and shutdown awaits the same close", async () => {
+	const h = lingerHarness({ env: { PI_REX_PANES_LINGER_SECONDS: "0" } });
+	let release!: () => void;
+	h.state.closeGate = new Promise<void>((resolve) => { release = resolve; });
+	expect(await h.transport.run(launch)).toEqual({ settled: true, aborted: false });
+	let stopped = false;
+	const shutdown = h.transport.shutdown().then(() => { stopped = true; });
+	await flush();
+	expect(stopped).toBe(false);
+	expect(h.closed).toEqual(["child"]);
+	release();
+	await shutdown;
+	expect(stopped).toBe(true);
+	expect(h.closed).toEqual(["child"]);
+});
+
+test("shutdown bounds a hanging linger close by the grace period", async () => {
+	const h = lingerHarness({ env: { PI_REX_PANES_LINGER_SECONDS: "0" }, shutdownGraceMs: 5 });
+	let release!: () => void;
+	h.state.closeGate = new Promise<void>((resolve) => { release = resolve; });
+	await h.transport.run(launch);
+	await h.transport.shutdown();
+	expect(h.closed).toEqual(["child"]);
+	release();
+	await flush();
+});
+
+test("shutdown between settlement and the run continuation closes the successful pane", async () => {
+	const h = lingerHarness();
+	let shutdown: Promise<void> | undefined;
+	const outcome = await h.transport.run({ ...launch, processLine: () => {
+		queueMicrotask(() => { shutdown = h.transport.shutdown(); });
+	} });
+	await shutdown;
+	expect(outcome).toEqual({ settled: true, aborted: false });
+	expect(h.closed).toEqual(["child"]);
+	expect(h.clock.pending).toBe(0);
+});
+
 test.each(["abort", "shutdown"])("%s during an in-flight split waits for its ID and closes the pane", async (action) => {
 	const controller = new AbortController();
 	const calls: string[][] = [];
@@ -382,7 +454,12 @@ function lingerHarness(config: Omit<NonNullable<Parameters<typeof createPaneTran
 	const closed: string[] = [];
 	const anchors: string[] = [];
 	const live = new Set<string>();
-	const state = { focused: "p" as string | Error | undefined, views: 0 };
+	const state = {
+		focused: "p" as string | Error | undefined,
+		views: 0,
+		viewGate: undefined as Promise<void> | undefined,
+		closeGate: undefined as Promise<void> | undefined,
+	};
 	const transport = createPaneTransport({
 		...config, env: { REX_SESSION: "s", REX_BLOCK: "p", ...config.env }, lookup: () => "rex", timers: clock,
 		runner: async (_binary, args) => {
@@ -396,12 +473,14 @@ function lingerHarness(config: Omit<NonNullable<Parameters<typeof createPaneTran
 			}
 			if (args.includes("session.view")) {
 				state.views++;
+				await state.viewGate;
 				if (state.focused instanceof Error) throw state.focused;
 				return { code: 0, stdout: JSON.stringify({ active_window_id: "w", windows: [{ window_id: "w", focused_block_id: state.focused }] }), stderr: "" };
 			}
 			if (args.includes("wait")) return new Promise(() => {});
 			if (args.includes("close")) {
 				closed.push(args[5]!);
+				await state.closeGate;
 				live.delete(args[5]!);
 			}
 			return { code: 0, stdout: [...live].join("\n"), stderr: "" };
