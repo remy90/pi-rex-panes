@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0]
+
+### Added
+
+- Stand down when another extension owns `subagent`, with one notice per session naming its path.
+- Open pi-subagents' inspector dashboard in Rex splits from Fleet. Close inspector panes when the parent session shuts down.
+- Configure successful pane linger through `PI_REX_PANES_LINGER_SECONDS` or `rexPanes.lingerSeconds` in Pi settings.
+
+### Changed
+
+- Keep successful child panes open for 180 seconds by default while tool results return straight away. Focused panes stay open, with checks every 5 seconds and closure after 30 seconds unfocused.
+- Let the parent close successful children and clean up lingering panes during session shutdown. `PI_REX_PANES_KEEP=1` retains finished panes indefinitely.
+- Limit close-failure warnings in tool results to task aborts. Background linger cleanup failures produce no warning.
+
 ## [0.1.0]
 
 ### Added
