@@ -26,12 +26,12 @@ function reportFile() {
 	return join(dir, "report.ndjson");
 }
 
-test.each(["error", "aborted", "keep"])("reporter keeps %s panes open and stops writing after settling", (kind) => {
+test.each(["error", "aborted", "stop"])("reporter keeps %s panes open and stops writing after settling", (kind) => {
 	const file = reportFile();
 	const h = harness(file);
-	registerReporter(h.pi, kind === "keep" ? { PI_REX_PANES_KEEP: "1" } : {});
+	registerReporter(h.pi);
 	h.emit("session_start");
-	h.emit("message_end", { message: { role: "assistant", stopReason: kind === "keep" ? "stop" : kind } });
+	h.emit("message_end", { message: { role: "assistant", stopReason: kind } });
 	h.emit("agent_settled", { aborted: kind === "aborted" });
 	const report = readFileSync(file, "utf8");
 	h.emit("message_end", { message: { role: "assistant", stopReason: "stop" } });
@@ -45,8 +45,8 @@ test("distinct extension copies share one session claim and release it for reloa
 	const file = reportFile();
 	const first = harness(file, "same-session");
 	const duplicate = harness(file, "same-session");
-	registerReporter(first.pi, {});
-	registerReporter(duplicate.pi, {});
+	registerReporter(first.pi);
+	registerReporter(duplicate.pi);
 	first.emit("session_start");
 	duplicate.emit("session_start");
 	for (const h of [first, duplicate]) {
@@ -56,11 +56,11 @@ test("distinct extension copies share one session claim and release it for reloa
 	expect(readFileSync(file, "utf8")).toBe('{"type":"message_end","message":{"role":"user","content":"one"}}\n{"type":"agent_settled"}\n');
 	first.emit("session_shutdown");
 	const reload = harness(file, "same-session");
-	registerReporter(reload.pi, {});
+	registerReporter(reload.pi);
 	reload.emit("session_start");
 	duplicate.emit("session_shutdown"); // A losing copy cannot release the new claim.
 	const another = harness(file, "same-session");
-	registerReporter(another.pi, {});
+	registerReporter(another.pi);
 	another.emit("session_start");
 	for (const h of [reload, another]) h.emit("agent_settled");
 	expect(readFileSync(file, "utf8")).toEndWith('{"type":"agent_settled"}\n{"type":"agent_settled"}\n');
@@ -69,10 +69,10 @@ test("distinct extension copies share one session claim and release it for reloa
 	another.emit("session_shutdown");
 });
 
-test("reporter handlers append exact message_end and settled records before success shutdown", () => {
+test("reporter handlers append exact records and leave successful panes for the parent to close", () => {
 	const file = reportFile();
 	const h = harness(file);
-	registerReporter(h.pi, {});
+	registerReporter(h.pi);
 	expect(h.flags).toEqual(["rex-panes-report"]);
 	h.emit("session_start");
 	h.emit("agent_start", { type: "agent_start" });
@@ -80,6 +80,6 @@ test("reporter handlers append exact message_end and settled records before succ
 	h.emit("message_end", { type: "message_end", message: { role: "assistant", content: [], stopReason: "stop" } });
 	h.emit("agent_settled", { type: "agent_settled", aborted: false });
 	expect(readFileSync(file, "utf8")).toBe('{"type":"agent_start"}\n{"type":"message_end","message":{"role":"user","content":"Task: hello"}}\n{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}\n{"type":"agent_settled"}\n');
-	expect(h.shutdowns).toBe(1);
+	expect(h.shutdowns).toBe(0);
 	h.emit("session_shutdown");
 });
