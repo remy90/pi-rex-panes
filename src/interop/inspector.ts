@@ -14,11 +14,12 @@ import {
 
 interface InspectorDeps {
 	log?: (message: string) => void;
+	shutdownGraceMs?: number;
 	lookup?: (env: NodeJS.ProcessEnv) => string | undefined;
 	runner?: Runner;
 }
 
-export function registerInspector(pi: ExtensionAPI, deps: InspectorDeps = {}): () => boolean {
+export function registerInspector(pi: ExtensionAPI, deps: InspectorDeps = {}) {
 	const inspector = createInspector(deps);
 	let registration: InspectorRegistration | undefined;
 	let logged = false;
@@ -34,12 +35,18 @@ export function registerInspector(pi: ExtensionAPI, deps: InspectorDeps = {}): (
 			(deps.log ?? console.warn)(`pi-rex-panes inspector registration failed: ${request.result.error.message}`);
 		}
 	});
-	pi.on("session_shutdown", async () => {
-		registration?.dispose();
-		registration = undefined;
-		await inspector.shutdown();
-	});
-	return () => registration !== undefined;
+	let closing: Promise<void> | undefined;
+	return {
+		registered: () => registration !== undefined,
+		shutdown() {
+			if (closing) return closing;
+			const current = registration;
+			registration = undefined;
+			return closing = (async () => {
+				try { current?.dispose(); } finally { await inspector.shutdown(); }
+			})();
+		},
+	};
 }
 
 function result(text: string, isError = false): InspectorResult {
@@ -80,10 +87,26 @@ export function createInspector(deps: InspectorDeps = {}) {
 					shutdownSignal.signal.throwIfAborted();
 					const { rex, placement, binary, session } = connect(ctx);
 					let id = panes.get(key(ctx));
-					if (id && !(await rex.listPaneIds()).has(id)) {
-						placement.forget(id);
-						panes.delete(key(ctx));
-						id = undefined;
+					if (id) {
+						let live = (await rex.listPaneIds()).has(id);
+						if (live) {
+							try {
+								const state = await runner(binary, [
+									"--autostart=false", "--timeout", "3s", "block", "call", "-s", session, "-b", id, "process",
+								]);
+								const exit = state.code === 0 ? JSON.parse(state.stdout)?.last_exit?.exit_code : undefined;
+								if (Number.isInteger(exit)) {
+									const closed = await plugin.close!(ctx);
+									if (closed.isError) return closed;
+									live = false;
+								}
+							} catch { /* Preserve a pane whose process state cannot be read. */ }
+						}
+						if (!live) {
+							placement.forget(id);
+							panes.delete(key(ctx));
+							id = undefined;
+						}
 					}
 					id ??= await placement.open({
 						label: `pi-inspector-${ctx.target.runId}`, cwd: ctx.target.status.cwd ?? ctx.cwd,
@@ -116,24 +139,39 @@ export function createInspector(deps: InspectorDeps = {}) {
 			if (!id) return result("Rex inspector is closed.");
 			try {
 				const closed = await connection!.rex.closePane(id);
-				if (closed.code !== 0) return result(closed.stderr || `Could not close Rex inspector ${id}.`, true);
+				if (closed.code !== 0 && (await connection!.rex.listPaneIds()).has(id)) {
+					return result(closed.stderr || `Could not close Rex inspector ${id}.`, true);
+				}
 				connection!.placement.forget(id);
 				panes.delete(key(ctx));
 				return result(`Closed Rex inspector ${id}. The run continues.`);
 			} catch (error) { return result(String(error), true); }
 		},
 	};
+	let stopping: Promise<void> | undefined;
 	return {
 		plugin,
-		async shutdown() {
+		shutdown() {
+			if (stopping) return stopping;
 			shutdownSignal.abort();
-			await Promise.allSettled([...opening.values()]);
-			await Promise.allSettled([...panes].map(async ([target, id]) => {
-				const closed = await connection!.rex.closePane(id);
-				if (closed.code !== 0) throw new Error(closed.stderr || `Could not close Rex inspector ${id}`);
-				connection!.placement.forget(id);
-				panes.delete(target);
-			}));
+			const cleanup = async () => {
+				await Promise.allSettled([...opening.values()]);
+				await Promise.allSettled([...panes].map(async ([target, id]) => {
+					const closed = await connection!.rex.closePane(id);
+					if (closed.code !== 0) throw new Error(closed.stderr || `Could not close Rex inspector ${id}`);
+					connection!.placement.forget(id);
+					panes.delete(target);
+				}));
+			};
+			return stopping = (async () => {
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					await Promise.race([
+						cleanup(),
+						new Promise<void>((resolve) => { timer = setTimeout(resolve, deps.shutdownGraceMs ?? 5000); }),
+					]);
+				} finally { if (timer) clearTimeout(timer); }
+			})();
 		},
 	};
 }

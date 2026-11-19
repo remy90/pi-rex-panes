@@ -20,11 +20,13 @@ function harness(owner?: string, reporter = false) {
 	return {
 		flags, tools, notices,
 		setOwner(path: string) { owner = path; },
-		async fire(name: string) {
-			for (const handler of handlers.get(name) ?? []) await handler({}, {
+		async fire(name: string, event: object = {}) {
+			const results: unknown[] = [];
+			for (const handler of handlers.get(name) ?? []) results.push(await handler(event, {
 				hasUI: true, sessionManager: { getSessionId: () => "interop-test" },
 				ui: { notify: (message: string) => notices.push(message) },
-			});
+			}));
+			return results;
 		},
 	};
 }
@@ -49,6 +51,15 @@ test("a fresh standalone session exposes subagent before its first request", asy
 	h.setOwner(new URL("../index.ts", import.meta.url).pathname);
 	await h.fire("before_agent_start");
 	expect(h.notices).toEqual([]);
+	await h.fire("session_shutdown");
+});
+
+test("a later foreign owner keeps control of its tool results", async () => {
+	const h = harness();
+	await h.fire("session_start");
+	h.setOwner("/extensions/other/subagent.ts");
+	const results = await h.fire("tool_result", { toolName: "subagent", details: { isError: true } });
+	expect(results.every((result) => result === undefined)).toBe(true);
 	await h.fire("session_shutdown");
 });
 
