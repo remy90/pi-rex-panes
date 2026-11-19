@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createRexClient, UncertainPaneLaunch, type RexClient, type Runner } from "./rex/client.ts";
 import { findRex } from "./rex/lookup.ts";
 import { createPlacement, type Placement } from "./rex/placement.ts";
+import { withinGrace } from "./grace.ts";
 import { PARENT_PID_ENV } from "./reporter.ts";
 import { DEFAULT_START_TIMEOUT_MS, isFailureStopReason, tailReport, type ReportOutcome } from "./report-tail.ts";
 
@@ -116,15 +117,10 @@ export function createPaneTransport(deps: {
 			const running = [...active.entries()];
 			for (const [controller] of running) controller.abort();
 			const closing = [...lingering].map(close);
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			try {
-				await Promise.race([
-					Promise.allSettled([...running.map(([, finished]) => finished), ...closing]),
-					new Promise<void>((resolve) => { timer = setTimeout(resolve, deps.shutdownGraceMs ?? 5000); }),
-				]);
-			} finally {
-				if (timer) clearTimeout(timer);
-			}
+			await withinGrace(
+				Promise.allSettled([...running.map(([, finished]) => finished), ...closing]),
+				deps.shutdownGraceMs,
+			);
 		},
 		async run(options: PaneLaunch): Promise<ReportOutcome | undefined> {
 			if (env.PI_REX_PANES === "0" || !env.REX_SESSION || !env.REX_BLOCK) return undefined;

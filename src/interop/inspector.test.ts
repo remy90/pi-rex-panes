@@ -13,7 +13,7 @@ const launch: InspectorLaunch = {
 	executable: "/bin/node", argv: ["/inspector.js", "argument with spaces", "--flag"], displayCommand: "ignored",
 	allowSteer: true, allowStop: true, sessionRoots: [],
 };
-function harness() {
+function harness(failure?: "probe" | "close") {
 	const commands: string[][] = [];
 	const live = new Set<string>(["parent", "foreign"]);
 	const exited = new Set<string>();
@@ -26,6 +26,8 @@ function harness() {
 			return { code: 0, stdout: JSON.stringify({ block_ids: [id] }), stderr: "" };
 		}
 		if (args.includes("ls")) return { code: 0, stdout: [...live].join("\n"), stderr: "" };
+		if (failure === "probe" && args.includes("process")) throw new Error("Probe unavailable");
+		if (failure === "close" && args.includes("close")) return { code: 1, stdout: "", stderr: "Close unavailable" };
 		if (args.includes("process")) return {
 			code: 0, stdout: JSON.stringify({ last_exit: exited.has(args[8]!) ? { exit_code: 0 } : null }), stderr: "",
 		};
@@ -115,6 +117,25 @@ test("opening an exited inspector starts a fresh runner", async () => {
 	h.exited.add("pane-1");
 	await h.plugin.open(context, launch, {});
 	expect(h.live).toEqual(new Set(["parent", "foreign", "pane-2"]));
+});
+
+test("a failed state probe preserves the existing inspector", async () => {
+	const h = harness("probe");
+	await h.plugin.open(context, launch, {});
+	expect((await h.plugin.open(context, launch, {})).isError).not.toBe(true);
+	expect(h.commands.filter((args) => args.includes("split"))).toHaveLength(1);
+	expect(h.plugin.owns(context)).toBe(true);
+	await h.shutdown();
+});
+
+test("an exited pane whose close fails remains owned and reports the error", async () => {
+	const h = harness("close");
+	await h.plugin.open(context, launch, {});
+	h.exited.add("pane-1");
+	expect((await h.plugin.open(context, launch, {})).isError).toBe(true);
+	expect(h.commands.filter((args) => args.includes("split"))).toHaveLength(1);
+	expect(h.plugin.owns(context)).toBe(true);
+	await h.shutdown();
 });
 
 test("parent shutdown closes every tracked inspector", async () => {
