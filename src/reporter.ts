@@ -81,14 +81,15 @@ export function registerReporter(pi: ExtensionAPI, deps: {
 			watching = false;
 			timer = undefined;
 			try {
-				if (settled && !failed && env.REX_SESSION && env.REX_BLOCK) {
+				if (!settled) ctx.abort();
+				else if (!failed && env.REX_SESSION && env.REX_BLOCK) {
 					const binary = (deps.lookup ?? findRex)(env);
 					if (binary) await withinGrace(
 						createRexClient(binary, env.REX_SESSION, deps.runner).closePane(env.REX_BLOCK),
 						PARENT_CLOSE_GRACE_MS, timers,
 					);
 				}
-			} catch { /* Parent loss still shuts down the child when Rex cannot close its pane. */ }
+			} catch { /* Shutdown proceeds if abort or pane cleanup fails. */ }
 			finally { ctx.shutdown(); }
 		};
 		timer = timers.setTimeout(poll, PARENT_POLL_MS);

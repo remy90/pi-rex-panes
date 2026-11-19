@@ -71,7 +71,7 @@ A non-empty `PI_REX_PANES_LINGER_SECONDS` overrides that setting. When the envir
 
 Failed panes stay open for inspection, including panes whose child crashes during startup. Aborting a task closes its pane, including with `PI_REX_PANES_KEEP=1`. Parent session shutdown aborts active pane tasks and closes lingering panes, with up to five seconds for cleanup.
 
-Each child checks every 2 seconds whether its parent process still exists, including after a forced parent exit. When the parent is gone, a child that settled successfully tries to close its own pane. The watchdog shuts down the child even if Rex cannot close it. Failed or unfinished runs, including aborted runs, leave their final screen visible through `--keep-open`. A failed close can also leave a completed pane on screen.
+Each child checks every 2 seconds whether its parent process still exists, including after a forced parent exit. When the parent is gone, a child that settled successfully tries to close its own pane. The watchdog aborts a running child before requesting shutdown. Settled children shut down even if Rex cannot close their pane. Failed or unfinished runs, including aborted runs, leave their final screen visible through `--keep-open`. A failed close can also leave a completed pane on screen.
 
 Rex launches use `--shell=none --keep-open` to leave process failures visible until you close the pane. An open pane remains an anchor for later children. After a failed close, the parent retries once and includes the block ID in a warning if task abort cleanup still fails. Linger cleanup runs silently, with another attempt during session shutdown.
 

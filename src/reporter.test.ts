@@ -48,22 +48,36 @@ test("a successful child closes its pane and exits after its parent disappears",
 	clock.die();
 	await clock.tick();
 	expect(clock.commands).toEqual([["--autostart=false", "--timeout", "3s", "block", "close", "child", "-s", "session"]]);
+	expect(h.calls).toEqual(["shutdown"]);
 	expect(h.shutdowns).toBe(1);
 	expect(clock.pending.size).toBe(0);
 	h.emit("session_shutdown");
 });
 
-test.each(["error", "aborted", "unsettled"])("a %s child exits without closing its pane after parent loss", async (kind) => {
+test("a running child aborts before shutdown after parent loss and leaves its pane open", async () => {
 	const h = harness(reportFile());
 	const clock = watchdog();
 	registerReporter(h.pi, clock.deps);
 	h.emit("session_start");
-	if (kind !== "unsettled") {
-		h.emit("message_end", { message: { role: "assistant", stopReason: kind === "error" ? "error" : "stop" } });
-		h.emit("agent_settled", { aborted: kind === "aborted" });
-	}
+	h.emit("agent_start");
 	clock.die();
 	await clock.tick();
+	expect(h.calls).toEqual(["abort", "shutdown"]);
+	expect(clock.commands).toEqual([]);
+	expect(clock.pending.size).toBe(0);
+	h.emit("session_shutdown");
+});
+
+test.each(["error", "aborted"])("a %s child exits without closing its pane after parent loss", async (kind) => {
+	const h = harness(reportFile());
+	const clock = watchdog();
+	registerReporter(h.pi, clock.deps);
+	h.emit("session_start");
+	h.emit("message_end", { message: { role: "assistant", stopReason: kind === "error" ? "error" : "stop" } });
+	h.emit("agent_settled", { aborted: kind === "aborted" });
+	clock.die();
+	await clock.tick();
+	expect(h.calls).toEqual(["shutdown"]);
 	expect(h.shutdowns).toBe(1);
 	expect(clock.commands).toEqual([]);
 	h.emit("session_shutdown");
@@ -141,14 +155,19 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 function harness(file: string, session: string = crypto.randomUUID()) {
 	const handlers = new Map<string, (...args: any[]) => any>();
 	let shutdowns = 0;
+	const calls: string[] = [];
 	const flags: string[] = [];
 	const pi = {
 		registerFlag(name: string) { flags.push(name); },
 		getFlag() { return file; },
 		on(name: string, handler: (...args: any[]) => any) { handlers.set(name, handler); },
 	} as unknown as ExtensionAPI;
-	const ctx = { sessionManager: { getSessionId: () => session }, shutdown: () => { shutdowns++; } };
-	return { pi, flags, emit: (name: string, event = {}) => handlers.get(name)?.(event, ctx), get shutdowns() { return shutdowns; } };
+	const ctx = {
+		sessionManager: { getSessionId: () => session },
+		abort: () => { calls.push("abort"); },
+		shutdown: () => { calls.push("shutdown"); shutdowns++; },
+	};
+	return { pi, flags, calls, emit: (name: string, event = {}) => handlers.get(name)?.(event, ctx), get shutdowns() { return shutdowns; } };
 }
 function reportFile() {
 	const dir = mkdtempSync(join(tmpdir(), "reporter-test-"));
