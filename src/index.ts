@@ -19,7 +19,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPaneTransport, type PaneTransport } from "./pane-transport.ts";
 import { buildChildArgs } from "./child-args.ts";
-import { registerReporter, REPORT_FLAG } from "./reporter.ts";
+import { registerReporter } from "./reporter.ts";
+import { registerOwnership } from "./interop/ownership.ts";
+import { registerInspector } from "./interop/inspector.ts";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -643,13 +645,12 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
 	registerReporter(pi);
-	const panes = createPaneTransport();
-	let registered = false;
-	pi.on("session_start", () => {
-		if (pi.getFlag(REPORT_FLAG) || registered) return;
-		registered = true;
-		registerSubagent(pi, panes);
-	});
+	const panes = createPaneTransport({
+		settings: () => (pi.getSettings() as any)?.rexPanes,
+	} as Parameters<typeof createPaneTransport>[0]); // The linger workstream adds the settings dependency.
+	const inspectorRegistered = registerInspector(pi);
+	const packageRoot = fileURLToPath(new URL("../", import.meta.url));
+	registerOwnership(pi, packageRoot, () => registerSubagent(pi, panes), inspectorRegistered);
 	pi.on("session_shutdown", () => panes.shutdown());
 }
 
