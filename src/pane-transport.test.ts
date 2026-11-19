@@ -19,6 +19,25 @@ test.each([[0, 0], [60, 60], [" 2 ", 2], ["0", 0], ["2147483", 2_147_483]] as co
 	expect(parseLingerSeconds(value)).toBe(expected);
 });
 
+test.each([
+	[undefined, []],
+	["", []],
+	["/tmp/agent config=custom", ["PI_CODING_AGENT_DIR=/tmp/agent config=custom"]],
+	[" \t ", ["PI_CODING_AGENT_DIR= \t "]],
+] as const)("pane argv forwards only a non-empty agent directory: %j", async (agentDir, expected) => {
+	let argv: string[] = [];
+	const transport = createPaneTransport({
+		env: { REX_SESSION: "s", REX_BLOCK: "p", PI_REX_PANES_KEEP: "1", PI_CODING_AGENT_DIR: agentDir },
+		lookup: () => "rex",
+		runner: async (_binary, args) => {
+			argv = args.slice(args.indexOf("--") + 1, args.indexOf("--no-session"));
+			return { code: 1, stdout: "", stderr: "split rejected" };
+		},
+	});
+	await transport.run(launch);
+	expect(argv).toEqual(["/usr/bin/env", "PI_REX_PANES_KEEP=1", `PI_REX_PANES_PARENT_PID=${process.pid}`, ...expected, "pi"]);
+});
+
 test("pane reports feed processLine from a private file, settle, and clean up", async () => {
 	let file = "";
 	let waitSignal: AbortSignal | undefined;

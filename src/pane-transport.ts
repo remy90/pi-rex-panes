@@ -151,7 +151,8 @@ export function createPaneTransport(deps: {
 				let id: string;
 				try {
 					id = await placement.open({ label: options.label, cwd: options.cwd,
-						argv: ["/usr/bin/env", `PI_REX_PANES_KEEP=${env.PI_REX_PANES_KEEP === "1" ? "1" : "0"}`, `${PARENT_PID_ENV}=${process.pid}`, ...options.argv(file)],
+						argv: ["/usr/bin/env", `PI_REX_PANES_KEEP=${env.PI_REX_PANES_KEEP === "1" ? "1" : "0"}`, `${PARENT_PID_ENV}=${process.pid}`,
+							...(env.PI_CODING_AGENT_DIR ? [`PI_CODING_AGENT_DIR=${env.PI_CODING_AGENT_DIR}`] : []), ...options.argv(file)],
 					}, controller.signal);
 				} catch (error) {
 					if (controller.signal.aborted) return { settled: false, aborted: true };
