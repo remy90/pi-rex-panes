@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, existsSync, statSync } from "node:fs";
-import { createPaneTransport, parseStartTimeout } from "./pane-transport.ts";
+import { createPaneTransport, parseLingerSeconds, parseStartTimeout } from "./pane-transport.ts";
 import type { Runner } from "./rex/client.ts";
 
 test.each([undefined, "", "0", "-1", "1.5", "60s", "Infinity", "2147483648"])("invalid startup timeout %s uses 60 seconds", (value) => {
@@ -9,6 +9,14 @@ test.each([undefined, "", "0", "-1", "1.5", "60s", "Infinity", "2147483648"])("i
 
 test.each([["1", 1], [" 2000 ", 2000], ["2147483647", 2_147_483_647]] as const)("startup timeout %s accepts milliseconds", (value, expected) => {
 	expect(parseStartTimeout(value)).toBe(expected);
+});
+
+test.each([undefined, null, "", " ", -1, "-1", 1.5, "1.5", "180s", Infinity, "Infinity", true, {}, 2_147_484])("invalid linger %j uses 180 seconds", (value) => {
+	expect(parseLingerSeconds(value)).toBe(180);
+});
+
+test.each([[0, 0], [60, 60], [" 2 ", 2], ["0", 0], ["2147483", 2_147_483]] as const)("linger %j accepts whole seconds", (value, expected) => {
+	expect(parseLingerSeconds(value)).toBe(expected);
 });
 
 test("pane reports feed processLine from a private file, settle, and clean up", async () => {

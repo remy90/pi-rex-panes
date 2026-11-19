@@ -8,6 +8,11 @@ import { withinGrace } from "./grace.ts";
 import { PARENT_PID_ENV } from "./reporter.ts";
 import { DEFAULT_START_TIMEOUT_MS, isFailureStopReason, tailReport, type ReportOutcome } from "./report-tail.ts";
 
+export const DEFAULT_LINGER_SECONDS = 180;
+export const MAX_LINGER_SECONDS = 2_147_483;
+const UNFOCUSED_CLOSE_MS = 30_000;
+const FOCUS_POLL_MS = 5_000;
+
 interface PaneLaunch {
 	label: string;
 	cwd: string;
@@ -86,9 +91,7 @@ export function createPaneTransport(deps: {
 			try { value = deps.settings?.()?.lingerSeconds; }
 			catch { /* Use the default when settings cannot be read. */ }
 		}
-		const seconds = typeof value === "number" ? value
-			: typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : NaN;
-		const delay = Number.isInteger(seconds) && seconds >= 0 && seconds <= 2_147_483 ? seconds * 1_000 : 180_000;
+		const delay = parseLingerSeconds(value) * 1_000;
 		if (delay === 0) {
 			void close(pane);
 			return;
@@ -103,12 +106,12 @@ export function createPaneTransport(deps: {
 				unfocusedSince = undefined;
 			} else {
 				unfocusedSince ??= timers.now();
-				if (!postponed || timers.now() - unfocusedSince >= 30_000) {
+				if (!postponed || timers.now() - unfocusedSince >= UNFOCUSED_CLOSE_MS) {
 					void close(pane);
 					return;
 				}
 			}
-			pane.timer = timers.setTimeout(() => { void check(); }, 5_000);
+			pane.timer = timers.setTimeout(() => { void check(); }, FOCUS_POLL_MS);
 		};
 		pane.timer = timers.setTimeout(() => { void check(); }, delay);
 	};
@@ -178,6 +181,13 @@ export function createPaneTransport(deps: {
 			}
 		},
 	};
+}
+
+export function parseLingerSeconds(value: unknown): number {
+	const seconds = typeof value === "number" ? value
+		: typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : NaN;
+	return Number.isInteger(seconds) && seconds >= 0 && seconds <= MAX_LINGER_SECONDS
+		? seconds : DEFAULT_LINGER_SECONDS;
 }
 
 export function parseStartTimeout(value: string | undefined): number {
