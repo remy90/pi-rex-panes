@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerOwnership } from "./ownership.ts";
 
-function harness(owner?: string, hasUI = true, reporter = false) {
+function harness(owner?: string, hasUI = true, reporter = false, fleetAvailable = true) {
 	const handlers = new Map<string, Function[]>();
 	const notices: string[] = [];
 	let registrations = 0;
@@ -11,7 +11,7 @@ function harness(owner?: string, hasUI = true, reporter = false) {
 		getAllTools: () => owner ? [{ name: "subagent", sourceInfo: { path: owner } }] : [],
 		getFlag: () => reporter,
 	} as unknown as ExtensionAPI;
-	registerOwnership(pi, "/package", () => { registrations++; owner = "/package/src/index.ts"; }, () => true);
+	registerOwnership(pi, "/package", () => { registrations++; owner = "/package/src/index.ts"; }, () => fleetAvailable);
 	return {
 		notices, registrations: () => registrations,
 		setOwner(value: string) { owner = value; },
@@ -33,6 +33,14 @@ test("foreign subagent keeps ownership and gets one notice before the first requ
 	expect(h.notices).toHaveLength(1);
 	expect(h.notices[0]).toContain("/npm/pi-subagents/index.ts");
 	expect(h.notices[0]).toContain("Fleet opens runs in Rex splits");
+});
+
+test("the pi-subagents notice explains inspector availability outside Rex", async () => {
+	const h = harness("/npm/pi-subagents/index.ts", true, false, false);
+	await h.fire("session_start");
+	await h.fire("before_agent_start");
+	expect(h.notices[0]).toContain("The Rex inspector is unavailable outside Rex.");
+	expect(h.notices[0]).not.toContain("Fleet opens runs in Rex splits.");
 });
 
 test("an unclaimed tool registers at session_start and stays quiet", async () => {

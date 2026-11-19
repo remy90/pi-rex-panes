@@ -24,7 +24,7 @@ export function registerInspector(pi: ExtensionAPI, deps: InspectorDeps = {}) {
 	const inspector = createInspector(deps);
 	let registration: InspectorRegistration | undefined;
 	let logged = false;
-	pi.on("session_start", () => {
+	pi.on("session_start", (_event, ctx) => {
 		registration?.dispose();
 		registration = undefined;
 		if (pi.getFlag(REPORT_FLAG)) return;
@@ -32,13 +32,20 @@ export function registerInspector(pi: ExtensionAPI, deps: InspectorDeps = {}) {
 		pi.events.emit(INSPECTOR_REGISTER_EVENT, request);
 		if (request.result?.ok) registration = request.result.registration;
 		else if (request.result && !logged) {
-			logged = true;
-			(deps.log ?? console.warn)(`pi-rex-panes inspector registration failed: ${request.result.error.message}`);
+			const message = `pi-rex-panes inspector registration failed: ${request.result.error.message}`;
+			if (deps.log) {
+				deps.log(message);
+				logged = true;
+			} else if (ctx.hasUI) {
+				ctx.ui.notify(message, "warning");
+				logged = true;
+			}
 		}
 	});
 	let closing: Promise<void> | undefined;
 	return {
 		registered: () => registration !== undefined,
+		available: (env = process.env) => registration !== undefined && inspector.available(env),
 		shutdown() {
 			if (closing) return closing;
 			const current = registration;
@@ -106,9 +113,10 @@ export function createInspector(deps: InspectorDeps = {}) {
 		const closed = await closeEntry(target);
 		return closed.isError ? { error: closed } : {};
 	};
+	const available = (env = process.env) => Boolean(env.REX_SESSION && env.REX_BLOCK && lookup(env));
 	const plugin: InspectorPlugin = {
 		name: "rex-panes",
-		available: (ctx) => Boolean(ctx.env.REX_SESSION && ctx.env.REX_BLOCK && lookup(ctx.env)),
+		available: (ctx) => available(ctx.env),
 		owns: (ctx) => panes.has(key(ctx)),
 		async open(ctx, launch, params) {
 			const existing = opening.get(key(ctx));
@@ -149,6 +157,7 @@ export function createInspector(deps: InspectorDeps = {}) {
 	let stopping: Promise<void> | undefined;
 	return {
 		plugin,
+		available,
 		shutdown() {
 			if (stopping) return stopping;
 			shutdownSignal.abort();

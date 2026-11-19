@@ -188,10 +188,11 @@ test("inspector shutdown returns within its grace when Rex hangs", async () => {
 	expect(closing).toBe(true);
 }, 100);
 
-function registrationHarness(outcome: "absent" | "rejected" | "accepted") {
+function registrationHarness(outcome: "absent" | "rejected" | "accepted", useLog = true, hasUI = false) {
 	const handlers = new Map<string, Function[]>();
 	const emitted: InspectorRegistrationRequest[] = [];
 	const log: string[] = [];
+	const notices: { message: string; level: string }[] = [];
 	let disposed = 0;
 	const pi = {
 		on(name: string, handler: Function) { handlers.set(name, [...handlers.get(name) ?? [], handler]); },
@@ -203,12 +204,43 @@ function registrationHarness(outcome: "absent" | "rejected" | "accepted") {
 			if (outcome === "rejected") request.result = { ok: false, error: new Error("Rejected plugin") };
 		} },
 	} as unknown as ExtensionAPI;
-	const handle = registerInspector(pi, { log: (message) => log.push(message) });
+	const handle = registerInspector(pi, {
+		lookup: (env) => env.REX_BIN_DIR === "/bin" ? "/bin/rex" : undefined,
+		log: useLog ? (message) => log.push(message) : undefined,
+	});
 	return {
-		emitted, log, registered: handle.registered, shutdown: handle.shutdown, disposed: () => disposed,
-		async fire(name: string) { for (const handler of handlers.get(name) ?? []) await handler({}); },
+		emitted, log, notices, registered: handle.registered, available: handle.available, shutdown: handle.shutdown, disposed: () => disposed,
+		async fire(name: string) {
+			for (const handler of handlers.get(name) ?? []) await handler({}, {
+				hasUI, ui: { notify: (message: string, level: string) => notices.push({ message, level }) },
+			});
+		},
 	};
 }
+
+test("Fleet availability requires registration and a usable Rex connection", async () => {
+	const h = registrationHarness("accepted");
+	const env = { REX_SESSION: "s", REX_BLOCK: "p", REX_BIN_DIR: "/bin" };
+	expect(h.available(env)).toBe(false);
+	await h.fire("session_start");
+	expect(h.available(env)).toBe(true);
+	for (const outside of [{}, { REX_SESSION: "s", REX_BIN_DIR: "/bin" }, { REX_SESSION: "s", REX_BLOCK: "p" }]) {
+		expect(h.available(outside)).toBe(false);
+	}
+	await h.shutdown();
+	expect(h.available(env)).toBe(false);
+});
+
+test.each([true, false])("registration rejection warns once through UI=%s", async (hasUI) => {
+	const h = registrationHarness("rejected", false, hasUI);
+	await h.fire("session_start");
+	await h.fire("session_start");
+	expect(h.log).toEqual([]);
+	expect(h.notices).toEqual(hasUI ? [{
+		message: "pi-rex-panes inspector registration failed: Rejected plugin", level: "warning",
+	}] : []);
+	await h.shutdown();
+});
 
 test.each(["absent", "rejected", "accepted"] as const)("inspector registration handles %s listeners", async (outcome) => {
 	const h = registrationHarness(outcome);
