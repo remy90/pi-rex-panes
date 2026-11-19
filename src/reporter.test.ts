@@ -35,10 +35,10 @@ function watchdog() {
 	};
 }
 
-test("a successful child closes its pane and exits after its parent disappears", async () => {
+test.each([undefined, "0"])("a successful child with KEEP=%s closes its pane and exits after its parent disappears", async (keep) => {
 	const h = harness(reportFile());
 	const clock = watchdog();
-	registerReporter(h.pi, clock.deps);
+	registerReporter(h.pi, { ...clock.deps, env: { ...clock.deps.env, PI_REX_PANES_KEEP: keep } });
 	h.emit("session_start");
 	h.emit("message_end", { message: { role: "assistant", stopReason: "stop" } });
 	h.emit("agent_settled", { aborted: false });
@@ -54,10 +54,27 @@ test("a successful child closes its pane and exits after its parent disappears",
 	h.emit("session_shutdown");
 });
 
-test("a running child aborts before shutdown after parent loss and leaves its pane open", async () => {
+test("KEEP=1 preserves a successful pane after parent loss while shutting down the child", async () => {
 	const h = harness(reportFile());
 	const clock = watchdog();
-	registerReporter(h.pi, clock.deps);
+	registerReporter(h.pi, { ...clock.deps, env: { ...clock.deps.env, PI_REX_PANES_KEEP: "1" } });
+	h.emit("session_start");
+	h.emit("message_end", { message: { role: "assistant", stopReason: "stop" } });
+	h.emit("agent_settled", { aborted: false });
+	clock.die();
+	await clock.tick();
+	expect(clock.commands).toEqual([]);
+	expect(h.calls).toEqual(["shutdown"]);
+	expect(h.shutdowns).toBe(1);
+	expect(clock.delays).toEqual([2000]);
+	expect(clock.pending.size).toBe(0);
+	h.emit("session_shutdown");
+});
+
+test.each(["0", "1"])("a running child with KEEP=%s aborts before shutdown after parent loss and leaves its pane open", async (keep) => {
+	const h = harness(reportFile());
+	const clock = watchdog();
+	registerReporter(h.pi, { ...clock.deps, env: { ...clock.deps.env, PI_REX_PANES_KEEP: keep } });
 	h.emit("session_start");
 	h.emit("agent_start");
 	clock.die();

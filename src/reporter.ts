@@ -82,7 +82,7 @@ export function registerReporter(pi: ExtensionAPI, deps: {
 			timer = undefined;
 			try {
 				if (!settled) ctx.abort();
-				else if (!failed && env.REX_SESSION && env.REX_BLOCK) {
+				else if (!failed && env.PI_REX_PANES_KEEP !== "1" && env.REX_SESSION && env.REX_BLOCK) {
 					const binary = (deps.lookup ?? findRex)(env);
 					if (binary) await withinGrace(
 						createRexClient(binary, env.REX_SESSION, deps.runner).closePane(env.REX_BLOCK),
