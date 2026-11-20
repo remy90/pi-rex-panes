@@ -647,13 +647,12 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
 	registerReporter(pi);
-	const panes = createPaneTransport({
-		settings: () => (pi.getSettings() as { rexPanes?: { lingerSeconds?: unknown } } | undefined)?.rexPanes,
-	});
-	const inspector = registerInspector(pi);
-	const autoInspect = registerAutoInspect(pi, PACKAGE_ROOT, inspector, {
-		settings: () => (pi.getSettings() as { rexPanes?: { autoInspect?: unknown } } | undefined)?.rexPanes,
-	});
+	const settings = () => (pi.getSettings() as {
+		rexPanes?: { lingerSeconds?: unknown; autoInspect?: unknown };
+	} | undefined)?.rexPanes;
+	const panes = createPaneTransport({ settings });
+	const inspector = registerInspector(pi, { settings });
+	const autoInspect = registerAutoInspect(pi, PACKAGE_ROOT, inspector, { settings });
 	registerOwnership(pi, PACKAGE_ROOT, () => registerSubagent(pi, panes), inspector.available);
 	pi.on("session_shutdown", async () => {
 		autoInspect.shutdown();

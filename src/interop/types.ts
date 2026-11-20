@@ -57,4 +57,11 @@ export interface AsyncStarted {
 	mode: string;
 	sessionRoot?: string;
 }
+// success is optional in the result-watcher completion notification.
+export interface AsyncComplete {
+	runId?: string;
+	id?: string;
+	success?: boolean;
+}
 export const ASYNC_STARTED_EVENT = "subagent:async-started";
+export const ASYNC_COMPLETE_EVENT = "subagent:async-complete";

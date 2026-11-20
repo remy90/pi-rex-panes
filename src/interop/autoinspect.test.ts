@@ -33,7 +33,7 @@ function clock() {
 		},
 	};
 }
-function harness(options: { env?: NodeJS.ProcessEnv; settings?: { autoInspect?: unknown; lingerSeconds?: unknown }; exists?: boolean; owner?: string; reporter?: boolean; accepted?: boolean; sessionFile?: string | null } = {}) {
+function harness(options: { env?: NodeJS.ProcessEnv; settings?: { autoInspect?: unknown; lingerSeconds?: unknown }; exists?: boolean; owner?: string; reporter?: boolean; accepted?: boolean; sessionFile?: string | null; splitGate?: Promise<void> } = {}) {
 	const handlers = new Map<string, Function[]>();
 	const listeners = new Map<string, Set<(payload: unknown) => void>>();
 	const commands: string[][] = [];
@@ -66,10 +66,10 @@ function harness(options: { env?: NodeJS.ProcessEnv; settings?: { autoInspect?: 
 		},
 	} as unknown as ExtensionAPI;
 	const inspector = registerInspector(pi, {
-		lookup: () => "rex",
+		timers, settings: () => options.settings, lookup: () => "rex",
 		runner: async (_binary, args) => {
 			commands.push(args);
-			if (args.includes("split")) { const id = `pane-${++next}`; live.add(id); return { code: 0, stdout: JSON.stringify({ block_ids: [id] }), stderr: "" }; }
+			if (args.includes("split")) { await options.splitGate; const id = `pane-${++next}`; live.add(id); return { code: 0, stdout: JSON.stringify({ block_ids: [id] }), stderr: "" }; }
 			if (args.includes("ls")) return { code: 0, stdout: [...live].join("\n"), stderr: "" };
 			if (args.includes("process")) return { code: 0, stdout: '{"last_exit":null}', stderr: "" };
 			if (args.includes("close")) live.delete(args[5]!);
@@ -154,5 +154,136 @@ test("missing runner disables automatic opens for the session with one notice", 
 	expect(h.notices).toHaveLength(1);
 	expect(h.notices[0]).toContain("inspector-runner.mjs");
 	expect(h.commands).toEqual([]);
+	await h.shutdown();
+});
+
+test("completed automatic inspectors linger for 60 seconds then close", async () => {
+	const h = harness();
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	await h.timers.advance(90_000);
+	expect(h.live.has("pane-1")).toBe(true);
+	await h.emit("subagent:async-complete", { runId: "run", success: true });
+	await h.timers.advance(59_999);
+	expect(h.live.has("pane-1")).toBe(true);
+	await h.timers.advance(1);
+	expect(h.live.has("pane-1")).toBe(false);
+	expect(h.plugin.owns(context)).toBe(false);
+	await h.shutdown();
+});
+
+test("Fleet reuses the automatic pane and focus postpones linger cleanup", async () => {
+	const h = harness();
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	await h.plugin.open(context, { executable: "unused", argv: [], displayCommand: "", allowSteer: true, allowStop: true, sessionRoots: [] }, { focus: true });
+	expect(h.commands.filter((args) => args.includes("split"))).toHaveLength(1);
+	expect((await h.plugin.status!(context)).isError).not.toBe(true);
+	h.focus("pane-1");
+	await h.emit("subagent:async-complete", { id: "run", success: false });
+	await h.timers.advance(100_000);
+	expect(h.live.has("pane-1")).toBe(true);
+	h.focus("parent");
+	await h.timers.advance(34_999);
+	expect(h.live.has("pane-1")).toBe(true);
+	await h.timers.advance(1);
+	expect(h.live.has("pane-1")).toBe(false);
+	await h.shutdown();
+});
+
+test("shutdown closes automatic panes, cancels timers and removes listeners", async () => {
+	const h = harness();
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	await h.emit("subagent:async-complete", { runId: "run", success: true });
+	await h.shutdown();
+	expect(h.live).toEqual(new Set(["parent", "foreign"]));
+	expect(h.timers.pending).toBe(0);
+	const before = h.commands.length;
+	await h.emit("subagent:async-started", { ...started, id: "late" });
+	await h.timers.advance(120_000);
+	expect(h.commands).toHaveLength(before);
+});
+
+test.each([null, {}, { runId: 1 }, { runId: "" }, { runId: "run", success: "true" }, { runId: "unknown", success: true }])("malformed or unknown completion leaves the pane open: %j", async (payload) => {
+	const h = harness();
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	await h.emit("subagent:async-complete", payload);
+	await h.timers.advance(120_000);
+	expect(h.live.has("pane-1")).toBe(true);
+	await h.shutdown();
+});
+
+test.each([
+	{ env: { PI_REX_PANES_LINGER_SECONDS: "2" }, settings: { lingerSeconds: 3 }, delay: 2_000 },
+	{ settings: { lingerSeconds: 3 }, delay: 3_000 },
+	{ env: { PI_REX_PANES_LINGER_SECONDS: "invalid" }, settings: { lingerSeconds: 3 }, delay: 60_000 },
+	{ settings: { lingerSeconds: 0 }, delay: 0 },
+])("automatic panes use the child linger settings: %j", async ({ delay, ...options }) => {
+	const h = harness(options);
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	h.focus("pane-1");
+	await h.emit("subagent:async-complete", { runId: "run" });
+	if (delay === 0) expect(h.live.has("pane-1")).toBe(false);
+	else {
+		h.focus("parent");
+		await h.timers.advance(delay - 1);
+		expect(h.live.has("pane-1")).toBe(true);
+		await h.timers.advance(1);
+		expect(h.live.has("pane-1")).toBe(false);
+	}
+	await h.shutdown();
+});
+
+test("completion during a pending split starts linger after the inspector opens", async () => {
+	let release!: () => void;
+	const splitGate = new Promise<void>((resolve) => { release = resolve; });
+	const h = harness({ splitGate });
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	await h.emit("subagent:async-complete", { runId: "run", success: true });
+	expect(h.timers.pending).toBe(0);
+	release();
+	await flush();
+	await h.timers.advance(60_000);
+	expect(h.live.has("pane-1")).toBe(false);
+	await h.shutdown();
+});
+
+test("completion leaves a Fleet replacement of the original automatic pane alone", async () => {
+	const h = harness();
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	await h.plugin.close!(context);
+	await h.plugin.open(context, { executable: "fleet", argv: [], displayCommand: "", allowSteer: true, allowStop: true, sessionRoots: [] }, {});
+	await h.emit("subagent:async-complete", { runId: "run", success: true });
+	await h.timers.advance(120_000);
+	expect(h.live.has("pane-2")).toBe(true);
+	await h.shutdown();
+});
+
+test("an unsaved parent matches the current session ID and omitted roots encode as an empty list", async () => {
+	const h = harness({ sessionFile: null });
+	await h.session();
+	await h.emit("subagent:async-started", { ...started, sessionId: "current", sessionRoot: undefined, mode: "workflow" });
+	const split = h.commands.find((args) => args.includes("split"))!;
+	expect(split.at(-1)).toBe("W10=");
+	await h.shutdown();
+});
+
+test("session replacement removes earlier listeners and resets a missing-runner notice", async () => {
+	const options = { exists: false, sessionFile: "/sessions/current.jsonl" };
+	const h = harness(options);
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	options.sessionFile = "/sessions/next.jsonl";
+	await h.session();
+	await h.emit("subagent:async-started", started);
+	expect(h.notices).toHaveLength(1);
+	await h.emit("subagent:async-started", { ...started, sessionId: options.sessionFile });
+	expect(h.notices).toHaveLength(2);
+	expect(h.checks).toHaveLength(2);
 	await h.shutdown();
 });
