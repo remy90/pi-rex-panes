@@ -113,7 +113,7 @@ test.each(["0", "1"])("pane branch forwards KEEP=%s and the parent PID in child 
 		{ agent, available: [agent], cwd: process.cwd() }, "scout", "hello", undefined, undefined, undefined,
 		(results) => ({ mode: "single", results, isError: false }));
 	expect(result.status).toBe("completed");
-	expect(argv.slice(0, 3)).toEqual(["/usr/bin/env", `PI_REX_PANES_KEEP=${keep}`, `PI_REX_PANES_PARENT_PID=${process.pid}`]);
+	expect(argv.slice(0, 4)).toEqual(["/usr/bin/env", "PI_PROGRAM_STATUS=0", `PI_REX_PANES_KEEP=${keep}`, `PI_REX_PANES_PARENT_PID=${process.pid}`]);
 	expect(argv.slice(argv.indexOf("--no-session"))).toEqual([
 		"--no-session", "--model", "provider/model", "--thinking", "high", "--tools", "read,bash",
 		"--append-system-prompt", promptFile, "-e", realpathSync(fileURLToPath(new URL("./index.ts", import.meta.url))),

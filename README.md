@@ -90,12 +90,12 @@ Children use `--no-session` and write results to a private temporary report file
 | `REX_SESSION`, `REX_BLOCK` | Rex supplies the parent session and block. Both are required for panes. |
 | `REX_BIN_DIR` | Directory to search for `rex` before checking `PATH`. |
 
-Rex starts pane children directly with `--shell=none`, without running shell startup files. Configure provider credentials in Pi or in the environment available to Rex. Children use the parent's `PI_CODING_AGENT_DIR` when it is non-empty.
+Rex starts pane children directly with `--shell=none`, without running shell startup files. Configure provider credentials in Pi or in the environment available to Rex. Children use the parent's `PI_CODING_AGENT_DIR` when it is non-empty. Children start with `PI_PROGRAM_STATUS=0` so Rex does not notify when a child finishes; the parent's own status reports are unaffected.
 
 The pane child argv follows this shape. Optional arguments appear in brackets:
 
 ```text
-/usr/bin/env PI_REX_PANES_KEEP=0|1 PI_REX_PANES_PARENT_PID=<parent-pid> [PI_CODING_AGENT_DIR=<dir>] pi --no-session [--model m] [--thinking t] [--tools read,bash] [--append-system-prompt <file>] -e <package>/src/index.ts --rex-panes-report <file> "Task: <task>"
+/usr/bin/env PI_PROGRAM_STATUS=0 PI_REX_PANES_KEEP=0|1 PI_REX_PANES_PARENT_PID=<parent-pid> [PI_CODING_AGENT_DIR=<dir>] pi --no-session [--model m] [--thinking t] [--tools read,bash] [--append-system-prompt <file>] -e <package>/src/index.ts --rex-panes-report <file> "Task: <task>"
 ```
 
 When the parent uses a runtime and CLI script, the child reuses that invocation in place of `pi`. Each path and the complete task remain separate argv entries.

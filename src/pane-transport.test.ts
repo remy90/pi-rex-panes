@@ -24,7 +24,7 @@ test.each([
 	["", []],
 	["/tmp/agent config=custom", ["PI_CODING_AGENT_DIR=/tmp/agent config=custom"]],
 	[" \t ", ["PI_CODING_AGENT_DIR= \t "]],
-] as const)("pane argv forwards only a non-empty agent directory: %j", async (agentDir, expected) => {
+] as const)("pane argv silences child program status and forwards only a non-empty agent directory: %j", async (agentDir, expected) => {
 	let argv: string[] = [];
 	const transport = createPaneTransport({
 		env: { REX_SESSION: "s", REX_BLOCK: "p", PI_REX_PANES_KEEP: "1", PI_CODING_AGENT_DIR: agentDir },
@@ -35,7 +35,7 @@ test.each([
 		},
 	});
 	await transport.run(launch);
-	expect(argv).toEqual(["/usr/bin/env", "PI_REX_PANES_KEEP=1", `PI_REX_PANES_PARENT_PID=${process.pid}`, ...expected, "pi"]);
+	expect(argv).toEqual(["/usr/bin/env", "PI_PROGRAM_STATUS=0", "PI_REX_PANES_KEEP=1", `PI_REX_PANES_PARENT_PID=${process.pid}`, ...expected, "pi"]);
 });
 
 test("pane reports feed processLine from a private file, settle, and clean up", async () => {
@@ -53,7 +53,7 @@ test("pane reports feed processLine from a private file, settle, and clean up", 
 			return new Promise(() => {});
 		}
 		if (args.includes("session.view")) return { code: 0, stdout: '{"active_window_id":"w","windows":[{"window_id":"w","focused_block_id":"p"}]}', stderr: "" };
-		expect(args.slice(args.indexOf("--") + 1, args.indexOf("--") + 5)).toEqual(["/usr/bin/env", "PI_REX_PANES_KEEP=0", `PI_REX_PANES_PARENT_PID=${process.pid}`, "pi"]);
+		expect(args.slice(args.indexOf("--") + 1, args.indexOf("--") + 6)).toEqual(["/usr/bin/env", "PI_PROGRAM_STATUS=0", "PI_REX_PANES_KEEP=0", `PI_REX_PANES_PARENT_PID=${process.pid}`, "pi"]);
 		file = args[args.indexOf("--rex-panes-report") + 1];
 		expect(statSync(file).mode & 0o777).toBe(0o600);
 		appendFileSync(file, '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}\n{"type":"agent_settled"}\n');

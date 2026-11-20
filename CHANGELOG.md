@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Start pane children with `PI_PROGRAM_STATUS=0` so Rex does not notify when a child finishes.
 - Forward the parent's non-empty `PI_CODING_AGENT_DIR` to pane children so they load the same Pi configuration.
 - Return tool results as soon as the child settles. Successful panes linger for 180 seconds by default, with focus extending the delay until 30 seconds after focus leaves. The parent checks focus every 5 seconds.
 - Let the parent close successful children and clean up lingering panes during session shutdown. A child checks for parent exit every 2 seconds and shuts down if the parent dies. `PI_REX_PANES_KEEP=1` retains finished panes indefinitely, including after parent exit.
