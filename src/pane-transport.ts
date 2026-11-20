@@ -5,13 +5,12 @@ import { createRexClient, UncertainPaneLaunch, type RexClient, type Runner } fro
 import { findRex } from "./rex/lookup.ts";
 import { createPlacement, type Placement } from "./rex/placement.ts";
 import { withinGrace } from "./grace.ts";
+import { scheduleLinger, type LingerTimers } from "./interop/linger.ts";
 import { PARENT_PID_ENV } from "./reporter.ts";
 import { DEFAULT_START_TIMEOUT_MS, isFailureStopReason, tailReport, type ReportOutcome } from "./report-tail.ts";
 
 export const DEFAULT_LINGER_SECONDS = 60;
 export const MAX_LINGER_SECONDS = 2_147_483;
-const UNFOCUSED_CLOSE_MS = 30_000;
-const FOCUS_POLL_MS = 5_000;
 
 interface PaneLaunch {
 	label: string;
@@ -21,30 +20,13 @@ interface PaneLaunch {
 	signal?: AbortSignal;
 }
 
-interface LingerTimers {
-	now(): number;
-	setTimeout(callback: () => void, ms: number): unknown;
-	clearTimeout(handle: unknown): void;
-}
-
 interface LingeringPane {
 	id: string;
 	rex: RexClient;
 	placement: Placement;
-	timer?: unknown;
-	stopped?: boolean;
+	cancelLinger?: () => void;
 	closing?: Promise<boolean>;
 }
-
-const defaultTimers: LingerTimers = {
-	now: () => Date.now(),
-	setTimeout(callback, ms) {
-		const timer = setTimeout(callback, ms);
-		timer.unref();
-		return timer;
-	},
-	clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-};
 
 async function closePane(id: string, rex: RexClient, placement: Placement): Promise<boolean> {
 	for (let attempt = 0; attempt < 2; attempt++) {
@@ -70,11 +52,9 @@ export function createPaneTransport(deps: {
 	const placements = new Map<string, Placement>();
 	const active = new Map<AbortController, Promise<void>>();
 	const lingering = new Set<LingeringPane>();
-	const timers = deps.timers ?? defaultTimers;
 	const close = (pane: LingeringPane): Promise<boolean> => {
 		if (!pane.closing) {
-			pane.stopped = true;
-			if (pane.timer !== undefined) timers.clearTimeout(pane.timer);
+			pane.cancelLinger?.();
 			pane.closing = closePane(pane.id, pane.rex, pane.placement).then((closed) => {
 				if (closed) lingering.delete(pane);
 				else pane.closing = undefined;
@@ -91,29 +71,12 @@ export function createPaneTransport(deps: {
 			try { value = deps.settings?.()?.lingerSeconds; }
 			catch { /* Use the default when settings cannot be read. */ }
 		}
-		const delay = parseLingerSeconds(value) * 1_000;
-		if (delay === 0) {
-			void close(pane);
-			return;
-		}
-		let postponed = false;
-		let unfocusedSince: number | undefined;
-		const check = async () => {
-			const focused = await rex.focusedBlockId().catch(() => undefined);
-			if (pane.stopped) return;
-			if (focused === id) {
-				postponed = true;
-				unfocusedSince = undefined;
-			} else {
-				unfocusedSince ??= timers.now();
-				if (!postponed || timers.now() - unfocusedSince >= UNFOCUSED_CLOSE_MS) {
-					void close(pane);
-					return;
-				}
-			}
-			pane.timer = timers.setTimeout(() => { void check(); }, FOCUS_POLL_MS);
-		};
-		pane.timer = timers.setTimeout(() => { void check(); }, delay);
+		pane.cancelLinger = scheduleLinger({
+			delayMs: parseLingerSeconds(value) * 1_000,
+			timers: deps.timers,
+			isFocused: async () => await rex.focusedBlockId() === id,
+			close: () => { void close(pane); },
+		});
 	};
 	return {
 		async shutdown() {
