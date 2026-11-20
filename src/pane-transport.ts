@@ -8,7 +8,7 @@ import { withinGrace } from "./grace.ts";
 import { PARENT_PID_ENV } from "./reporter.ts";
 import { DEFAULT_START_TIMEOUT_MS, isFailureStopReason, tailReport, type ReportOutcome } from "./report-tail.ts";
 
-export const DEFAULT_LINGER_SECONDS = 180;
+export const DEFAULT_LINGER_SECONDS = 60;
 export const MAX_LINGER_SECONDS = 2_147_483;
 const UNFOCUSED_CLOSE_MS = 30_000;
 const FOCUS_POLL_MS = 5_000;
