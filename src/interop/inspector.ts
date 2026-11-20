@@ -44,6 +44,7 @@ export function registerInspector(pi: ExtensionAPI, deps: InspectorDeps = {}) {
 	});
 	let closing: Promise<void> | undefined;
 	return {
+		plugin: inspector.plugin,
 		registered: () => registration !== undefined,
 		available: (env = process.env) => registration !== undefined && inspector.available(env),
 		shutdown() {

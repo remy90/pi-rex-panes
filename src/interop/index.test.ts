@@ -14,7 +14,7 @@ function harness(owner?: string, reporter = false) {
 		registerTool(tool: { name: string }) { tools.push(tool.name); },
 		getAllTools: () => owner ? [{ name: "subagent", sourceInfo: { path: owner } }] : [],
 		getSettings: () => ({ rexPanes: { lingerSeconds: 0 } }),
-		events: { emit() {} },
+		events: { emit() {}, on() { return () => {}; } },
 	} as unknown as ExtensionAPI;
 	extension(pi);
 	return {
@@ -23,7 +23,7 @@ function harness(owner?: string, reporter = false) {
 		async fire(name: string, event: object = {}) {
 			const results: unknown[] = [];
 			for (const handler of handlers.get(name) ?? []) results.push(await handler(event, {
-				hasUI: true, sessionManager: { getSessionId: () => "interop-test" },
+				hasUI: true, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "interop-test" },
 				ui: { notify: (message: string) => notices.push(message) },
 			}));
 			return results;

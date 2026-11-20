@@ -22,6 +22,7 @@ import { buildChildArgs } from "./child-args.ts";
 import { registerReporter } from "./reporter.ts";
 import { foreignSubagentOwner, registerOwnership } from "./interop/ownership.ts";
 import { registerInspector } from "./interop/inspector.ts";
+import { registerAutoInspect } from "./interop/autoinspect.ts";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -650,8 +651,12 @@ export default function (pi: ExtensionAPI) {
 		settings: () => (pi.getSettings() as { rexPanes?: { lingerSeconds?: unknown } } | undefined)?.rexPanes,
 	});
 	const inspector = registerInspector(pi);
+	const autoInspect = registerAutoInspect(pi, PACKAGE_ROOT, inspector, {
+		settings: () => (pi.getSettings() as { rexPanes?: { autoInspect?: unknown } } | undefined)?.rexPanes,
+	});
 	registerOwnership(pi, PACKAGE_ROOT, () => registerSubagent(pi, panes), inspector.available);
 	pi.on("session_shutdown", async () => {
+		autoInspect.shutdown();
 		await Promise.allSettled([inspector.shutdown(), panes.shutdown()]);
 	});
 }

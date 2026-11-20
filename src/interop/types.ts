@@ -47,3 +47,14 @@ export interface InspectorRegistrationRequest {
 	result?: { ok: true; registration: InspectorRegistration } | { ok: false; error: Error };
 }
 export const INSPECTOR_REGISTER_EVENT = "pi-subagents:inspector-register:v1";
+
+// Async event fields consumed from pi-subagents 0.89.1.
+export interface AsyncStarted {
+	id: string;
+	asyncDir: string;
+	sessionId: string;
+	cwd: string;
+	mode: string;
+	sessionRoot?: string;
+}
+export const ASYNC_STARTED_EVENT = "subagent:async-started";
