@@ -22,6 +22,7 @@ import { buildChildArgs } from "./child-args.ts";
 import { registerReporter } from "./reporter.ts";
 import { foreignSubagentOwner, registerOwnership } from "./interop/ownership.ts";
 import { registerInspector } from "./interop/inspector.ts";
+import { registerAutoInspect } from "./interop/autoinspect.ts";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -646,12 +647,15 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
 	registerReporter(pi);
-	const panes = createPaneTransport({
-		settings: () => (pi.getSettings() as { rexPanes?: { lingerSeconds?: unknown } } | undefined)?.rexPanes,
-	});
-	const inspector = registerInspector(pi);
+	const settings = () => (pi.getSettings() as {
+		rexPanes?: { lingerSeconds?: unknown; autoInspect?: unknown };
+	} | undefined)?.rexPanes;
+	const panes = createPaneTransport({ settings });
+	const inspector = registerInspector(pi, { settings });
+	const autoInspect = registerAutoInspect(pi, PACKAGE_ROOT, inspector, { settings });
 	registerOwnership(pi, PACKAGE_ROOT, () => registerSubagent(pi, panes), inspector.available);
 	pi.on("session_shutdown", async () => {
+		autoInspect.shutdown();
 		await Promise.allSettled([inspector.shutdown(), panes.shutdown()]);
 	});
 }

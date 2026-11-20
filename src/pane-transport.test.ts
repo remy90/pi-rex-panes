@@ -11,8 +11,8 @@ test.each([["1", 1], [" 2000 ", 2000], ["2147483647", 2_147_483_647]] as const)(
 	expect(parseStartTimeout(value)).toBe(expected);
 });
 
-test.each([undefined, null, "", " ", -1, "-1", 1.5, "1.5", "180s", Infinity, "Infinity", true, {}, 2_147_484])("invalid linger %j uses 180 seconds", (value) => {
-	expect(parseLingerSeconds(value)).toBe(180);
+test.each([undefined, null, "", " ", -1, "-1", 1.5, "1.5", "180s", Infinity, "Infinity", true, {}, 2_147_484])("invalid linger %j uses 60 seconds", (value) => {
+	expect(parseLingerSeconds(value)).toBe(60);
 });
 
 test.each([[0, 0], [60, 60], [" 2 ", 2], ["0", 0], ["2147483", 2_147_483]] as const)("linger %j accepts whole seconds", (value, expected) => {
@@ -66,7 +66,7 @@ test("pane reports feed processLine from a private file, settle, and clean up", 
 	expect(closed).toEqual([]);
 	expect(waitSignal?.aborted).toBe(true);
 	expect(existsSync(file)).toBe(false);
-	await clock.advance(179_999);
+	await clock.advance(59_999);
 	expect(closed).toEqual([]);
 	await clock.advance(1);
 	expect(closed).toEqual(["child"]);
@@ -80,19 +80,19 @@ test.each([
 	["", "3", 3_000, 1],
 	[" \t ", 4, 4_000, 1],
 	[undefined, 0, 0, 1],
-	["invalid", 1, 180_000, 0],
-	["-1", 1, 180_000, 0],
-	["1.5", 1, 180_000, 0],
-	["Infinity", 1, 180_000, 0],
-	["2147484", 1, 180_000, 0],
-	[undefined, -1, 180_000, 1],
-	[undefined, 1.5, 180_000, 1],
-	[undefined, Infinity, 180_000, 1],
-	[undefined, "invalid", 180_000, 1],
-	[undefined, null, 180_000, 1],
-	[undefined, false, 180_000, 1],
-	[undefined, {}, 180_000, 1],
-	[undefined, undefined, 180_000, 1],
+	["invalid", 1, 60_000, 0],
+	["-1", 1, 60_000, 0],
+	["1.5", 1, 60_000, 0],
+	["Infinity", 1, 60_000, 0],
+	["2147484", 1, 60_000, 0],
+	[undefined, -1, 60_000, 1],
+	[undefined, 1.5, 60_000, 1],
+	[undefined, Infinity, 60_000, 1],
+	[undefined, "invalid", 60_000, 1],
+	[undefined, null, 60_000, 1],
+	[undefined, false, 60_000, 1],
+	[undefined, {}, 60_000, 1],
+	[undefined, undefined, 60_000, 1],
 ] as const)("linger env %s and setting %s close after %s ms", async (env, setting, delay, reads) => {
 	let settingsReads = 0;
 	const h = lingerHarness({
@@ -128,7 +128,7 @@ test("returning focus restarts the consecutive unfocused window", async () => {
 	const h = lingerHarness();
 	h.state.focused = "child";
 	await h.transport.run(launch);
-	await h.clock.advance(180_000);
+	await h.clock.advance(60_000);
 	h.state.focused = undefined;
 	await h.clock.advance(30_000);
 	expect(h.closed).toEqual([]);
@@ -145,7 +145,7 @@ test.each([false, true])("a failed focus read counts as unfocused, postponed: %s
 	const h = lingerHarness();
 	h.state.focused = postponed ? "child" : new Error("Rex unavailable");
 	await h.transport.run(launch);
-	await h.clock.advance(180_000);
+	await h.clock.advance(60_000);
 	if (postponed) {
 		expect(h.closed).toEqual([]);
 		h.state.focused = new Error("Rex unavailable");
@@ -168,7 +168,7 @@ test("KEEP=1 skips the linger timer even when linger is zero", async () => {
 test("a throwing settings getter falls back to the default linger", async () => {
 	const h = lingerHarness({ settings: () => { throw new Error("settings unavailable"); } });
 	await h.transport.run(launch);
-	await h.clock.advance(179_999);
+	await h.clock.advance(59_999);
 	expect(h.closed).toEqual([]);
 	await h.clock.advance(1);
 	expect(h.closed).toEqual(["child"]);
@@ -179,7 +179,7 @@ test("a lingering pane anchors the next split until it closes", async () => {
 	await h.transport.run(launch);
 	await h.transport.run(launch);
 	expect(h.anchors).toEqual(["p", "child"]);
-	await h.clock.advance(180_000);
+	await h.clock.advance(60_000);
 	expect(h.closed).toEqual(["child", "child-2"]);
 	await h.transport.run(launch);
 	expect(h.anchors).toEqual(["p", "child", "p"]);
@@ -189,7 +189,7 @@ test("shutdown retries a failed background close and the pane stays an anchor un
 	const h = lingerHarness();
 	h.state.closeCode = 1;
 	await h.transport.run(launch);
-	await h.clock.advance(180_000);
+	await h.clock.advance(60_000);
 	expect(h.closed).toEqual(["child", "child"]);
 	expect(h.clock.pending).toBe(0);
 	await h.transport.run(launch);
@@ -206,7 +206,7 @@ test("shutdown closes every lingering pane and cancels focus checks", async () =
 	const h = lingerHarness();
 	h.state.focused = "child";
 	await h.transport.run(launch);
-	await h.clock.advance(180_000);
+	await h.clock.advance(60_000);
 	await h.transport.run(launch);
 	await h.transport.shutdown();
 	expect(h.closed).toEqual(["child", "child-2"]);
@@ -223,7 +223,7 @@ test("shutdown during a focus read closes immediately and prevents rescheduling"
 	h.state.viewGate = new Promise<void>((resolve) => { release = resolve; });
 	h.state.focused = "child";
 	await h.transport.run(launch);
-	await h.clock.advance(180_000);
+	await h.clock.advance(60_000);
 	expect(h.state.views).toBe(1);
 	await h.transport.shutdown();
 	expect(h.closed).toEqual(["child"]);

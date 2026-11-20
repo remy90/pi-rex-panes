@@ -1,4 +1,6 @@
 import { withinGrace } from "../grace.ts";
+import { parseLingerSeconds } from "../pane-transport.ts";
+import { scheduleLinger, type LingerTimers } from "./linger.ts";
 import { createRexClient, runCommand, type RexClient, type Runner } from "../rex/client.ts";
 import { findRex } from "../rex/lookup.ts";
 import { createPlacement, type Placement } from "../rex/placement.ts";
@@ -7,6 +9,7 @@ import { REPORT_FLAG } from "../reporter.ts";
 import {
 	INSPECTOR_REGISTER_EVENT,
 	type InspectorContext,
+	type InspectorLaunch,
 	type InspectorPlugin,
 	type InspectorResult,
 	type InspectorRegistration,
@@ -18,6 +21,8 @@ interface InspectorDeps {
 	shutdownGraceMs?: number;
 	lookup?: (env: NodeJS.ProcessEnv) => string | undefined;
 	runner?: Runner;
+	timers?: LingerTimers;
+	settings?: () => { lingerSeconds?: unknown } | undefined;
 }
 
 export function registerInspector(pi: ExtensionAPI, deps: InspectorDeps = {}) {
@@ -44,6 +49,7 @@ export function registerInspector(pi: ExtensionAPI, deps: InspectorDeps = {}) {
 	});
 	let closing: Promise<void> | undefined;
 	return {
+		openAutomatically: inspector.openAutomatically,
 		registered: () => registration !== undefined,
 		available: (env = process.env) => registration !== undefined && inspector.available(env),
 		shutdown() {
@@ -65,6 +71,8 @@ interface PaneEntry {
 	id: string;
 	rex: RexClient;
 	placement: Placement;
+	cancelLinger?: () => void;
+	closing?: Promise<InspectorResult>;
 }
 
 export function createInspector(deps: InspectorDeps = {}) {
@@ -74,7 +82,7 @@ export function createInspector(deps: InspectorDeps = {}) {
 	const opening = new Map<string, Promise<InspectorResult>>();
 	const shutdownSignal = new AbortController();
 	const key = (ctx: InspectorContext) => JSON.stringify([ctx.target.runId, ctx.target.index ?? null]);
-	let connection: Omit<PaneEntry, "id"> | undefined;
+	let connection: Pick<PaneEntry, "rex" | "placement"> | undefined;
 	const connect = (ctx: InspectorContext) => {
 		if (connection) return connection;
 		const binary = lookup(ctx.env);
@@ -85,25 +93,38 @@ export function createInspector(deps: InspectorDeps = {}) {
 		};
 	};
 	const forget = (target: string, pane: PaneEntry) => {
+		pane.cancelLinger?.();
 		pane.placement.forget(pane.id);
-		panes.delete(target);
+		if (panes.get(target) === pane) panes.delete(target);
 	};
 	const closeEntry = async (target: string): Promise<InspectorResult> => {
 		const pane = panes.get(target);
 		if (!pane) return result("Rex inspector is closed.");
+		if (pane.closing) return pane.closing;
+		pane.cancelLinger?.();
 		const { id, rex } = pane;
-		try {
-			const closed = await rex.closePane(id);
-			if (closed.code !== 0 && (await rex.listPaneIds()).has(id)) {
-				return result(closed.stderr || `Could not close Rex inspector ${id}.`, true);
-			}
-			forget(target, pane);
-			return result(`Closed Rex inspector ${id}. The run continues.`);
-		} catch (error) { return result(String(error), true); }
+		const closing = (async () => {
+			try {
+				const closed = await rex.closePane(id);
+				if (closed.code !== 0 && (await rex.listPaneIds()).has(id)) {
+					return result(closed.stderr || `Could not close Rex inspector ${id}.`, true);
+				}
+				forget(target, pane);
+				return result(`Closed Rex inspector ${id}. The run continues.`);
+			} catch (error) { return result(String(error), true); }
+		})();
+		pane.closing = closing;
+		const closed = await closing;
+		if (closed.isError) pane.closing = undefined;
+		return closed;
 	};
 	const reusablePane = async (target: string): Promise<{ pane?: PaneEntry; error?: InspectorResult }> => {
 		const pane = panes.get(target);
 		if (!pane) return {};
+		if (pane.closing) {
+			const closed = await pane.closing;
+			return closed.isError ? { error: closed } : {};
+		}
 		if (!(await pane.rex.listPaneIds()).has(pane.id)) {
 			forget(target, pane);
 			return {};
@@ -131,7 +152,7 @@ export function createInspector(deps: InspectorDeps = {}) {
 						label: `pi-inspector-${ctx.target.runId}`, cwd: ctx.target.status.cwd ?? ctx.cwd,
 						argv: [launch.executable, ...launch.argv],
 					}, ctx.signal ? AbortSignal.any([ctx.signal, shutdownSignal.signal]) : shutdownSignal.signal);
-					panes.set(key(ctx), { id, rex, placement });
+					if (!reusable.pane) panes.set(key(ctx), { id, rex, placement });
 					if (params.focus) {
 						try {
 							await rex.focusPane(id);
@@ -154,20 +175,39 @@ export function createInspector(deps: InspectorDeps = {}) {
 		},
 		close: (ctx) => closeEntry(key(ctx)),
 	};
+	const linger = (ctx: InspectorContext) => {
+		const target = key(ctx);
+		const pane = panes.get(target);
+		if (!pane || pane.cancelLinger || shutdownSignal.signal.aborted) return;
+		let value: unknown = ctx.env.PI_REX_PANES_LINGER_SECONDS?.trim();
+		if (!value) {
+			try { value = deps.settings?.()?.lingerSeconds; }
+			catch { /* Use the default when settings cannot be read. */ }
+		}
+		pane.cancelLinger = scheduleLinger({
+			delayMs: parseLingerSeconds(value) * 1_000, timers: deps.timers,
+			isFocused: async () => await pane.rex.focusedBlockId() === pane.id,
+			close: () => { if (panes.get(target) === pane) void closeEntry(target); },
+		});
+	};
 	let stopping: Promise<void> | undefined;
 	return {
 		plugin,
 		available,
+		async openAutomatically(ctx: InspectorContext, launch: InspectorLaunch) {
+			const opened = await plugin.open(ctx, launch, { focus: false });
+			const pane = panes.get(key(ctx));
+			return () => {
+				if (!opened.isError && pane && panes.get(key(ctx)) === pane) linger(ctx);
+			};
+		},
 		shutdown() {
 			if (stopping) return stopping;
 			shutdownSignal.abort();
+			for (const pane of panes.values()) pane.cancelLinger?.();
 			const cleanup = async () => {
 				await Promise.allSettled([...opening.values()]);
-				await Promise.allSettled([...panes].map(async ([target, pane]) => {
-					const closed = await pane.rex.closePane(pane.id);
-					if (closed.code !== 0) throw new Error(closed.stderr || `Could not close Rex inspector ${pane.id}`);
-					forget(target, pane);
-				}));
+				await Promise.allSettled([...panes.keys()].map(closeEntry));
 			};
 			return stopping = withinGrace(cleanup(), deps.shutdownGraceMs);
 		},
