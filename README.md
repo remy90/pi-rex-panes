@@ -6,6 +6,8 @@ Rex gives each child a full interactive Pi in a split beside the parent. The fir
 
 The tool selects headless JSON mode when Rex context is unavailable.
 
+<!-- ![pi-rex-panes demo](docs/demo.gif) -->
+
 ## Requirements
 
 - Pi 1.5 or later, with a configured model provider.
@@ -18,7 +20,7 @@ The tool selects headless JSON mode when Rex context is unavailable.
 pi install npm:pi-rex-panes
 ```
 
-This package and `~/.pi/agent/extensions/subagent/` must never load together. Disable or remove that directory before loading the package. Disable any other extension that registers `subagent`, including other subagent packages.
+Install directly into your current Pi setup. Any extension already providing `subagent` keeps control, and pi-rex-panes tells you which one. To use this package's `subagent`, remove the extension named in that notice.
 
 For a local checkout:
 
@@ -26,6 +28,18 @@ For a local checkout:
 bun install
 pi --no-extensions -e .
 ```
+
+## With pi-subagents
+
+When another extension owns `subagent`, pi-rex-panes stands down. At the first prompt in an interactive session, it shows one notice naming the owner's path.
+
+Inside Rex, pi-rex-panes registers the `rex-panes` inspector with pi-subagents. Each new background run in the current session opens its dashboard in a split beside the parent, with focus staying on the parent. Workflow roots and their background steps each open an inspector. Foreground pi-subagents runs get no pane.
+
+Automatic inspector panes linger for 60 seconds after completion, using the focus rules and linger settings below. Parent session shutdown closes all inspector panes. `PI_REX_PANES_KEEP=1` applies to child panes only. Fleet (`/subagents-fleet`) can open a selected run through this inspector and reuses an existing pane for the same run. Closing an inspector leaves the run going.
+
+Set `PI_REX_PANES_AUTO_INSPECT=0` or `rexPanes.autoInspect: false` in Pi settings to disable automatic opens. Fleet remains available. If pi-subagents' `inspector-runner.mjs` is missing, automatic opens turn off for the session with one notice. Runs already active when a session resumes can be opened through Fleet.
+
+Tested with pi-subagents 0.89.1. The agent configuration below applies when pi-rex-panes owns `subagent`.
 
 ## Agents
 
@@ -45,9 +59,25 @@ The body is appended to the child's system prompt. Model settings accept `provid
 
 ## Pane lifetime
 
-Successful children write their final report and request Pi shutdown. The parent closes their panes. Failures stay open for inspection, including panes whose child crashes during startup. Aborting a task closes its pane. Parent session shutdown also aborts active pane tasks and waits up to five seconds for cleanup.
+Successful children write their final report and stay open for 60 seconds by default. The parent schedules cleanup in the background so tool results return straight away. At the deadline, an unfocused pane closes. If it is focused in Rex's active window, the parent checks every 5 seconds and closes it after 30 seconds continuously unfocused. A failed focus read counts as unfocused under the same rules.
 
-Set `PI_REX_PANES_KEEP=1` to keep every finished pane open. Task abort closes retained panes too. Rex launches use `--shell=none --keep-open` so process failures remain visible until you close the pane. Retained panes remain anchors for later children. When both close attempts fail, the result warns that the pane may still be open and includes its block ID for manual cleanup.
+Set `rexPanes.lingerSeconds` in Pi's `settings.json` to change the delay:
+
+```json
+{
+  "rexPanes": {
+    "lingerSeconds": 60
+  }
+}
+```
+
+A non-empty `PI_REX_PANES_LINGER_SECONDS` overrides that setting. When the environment variable is unset or blank, the parent reads `rexPanes.lingerSeconds`, then uses 60 seconds if absent. Values must be whole numbers from `0` to `2147483`. An invalid value uses 60 seconds, including an invalid environment override when a valid setting exists. Set `0` to close straight away, including while focused. `PI_REX_PANES_KEEP=1` keeps finished panes open indefinitely, including after the parent exits.
+
+Failed panes stay open for inspection, including panes whose child crashes during startup. Aborting a task closes its pane, including with `PI_REX_PANES_KEEP=1`. Parent session shutdown aborts active pane tasks and closes lingering panes, with up to five seconds for cleanup. Completed panes retained with `PI_REX_PANES_KEEP=1` stay open.
+
+Each child checks every 2 seconds whether its parent process still exists, including after a forced parent exit. When the parent is gone, a child that settled successfully tries to close its own pane unless `PI_REX_PANES_KEEP=1`. With KEEP enabled, the child shuts down and leaves the pane open through `--keep-open`. The watchdog aborts a running child before requesting shutdown. Settled children shut down even if Rex cannot close their pane. Failed or unfinished runs, including aborted runs, leave their final screen visible through `--keep-open`. A failed close can also leave a completed pane on screen.
+
+Rex launches use `--shell=none --keep-open` to leave process failures visible until you close the pane. An open pane remains an anchor for later children. After a failed close, the parent retries once and includes the block ID in a warning if task abort cleanup still fails. Linger cleanup runs silently, with another attempt during session shutdown.
 
 Children report `agent_start` when a run begins. If no start record arrives within 60 seconds, the parent returns a failed result and leaves the pane open. This covers startup errors shown only in the child UI and a reporter that fails to load. Runs have no timeout after starting. A timed-out child can still run in its pane; inspect it before retrying the task.
 
@@ -58,17 +88,19 @@ Children use `--no-session` and write results to a private temporary report file
 | Variable | Effect |
 | --- | --- |
 | `PI_REX_PANES=0` | Force headless children. |
-| `PI_REX_PANES_KEEP=1` | Keep completed and failed panes open. |
+| `PI_REX_PANES_KEEP=1` | Keep finished child panes open indefinitely, including after parent exit, overriding linger. Task abort still closes its pane. |
+| `PI_REX_PANES_AUTO_INSPECT=0` | Disable automatic inspector panes for pi-subagents background runs. Also configurable with `rexPanes.autoInspect: false`. |
+| `PI_REX_PANES_LINGER_SECONDS` | Seconds successful child panes and completed automatic inspectors linger. Default: `60`. Overrides `rexPanes.lingerSeconds` when non-empty. Accepts whole numbers from `0` to `2147483`; invalid values use the default. `0` closes straight away. |
 | `PI_REX_PANES_START_TIMEOUT_MS` | Milliseconds to wait for `agent_start`. Default: `60000`. Accepts whole numbers from `1` to `2147483647`; invalid values use the default. |
 | `REX_SESSION`, `REX_BLOCK` | Rex supplies the parent session and block. Both are required for panes. |
 | `REX_BIN_DIR` | Directory to search for `rex` before checking `PATH`. |
 
-Rex starts pane children directly with `--shell=none`, without running shell startup files. Configure provider credentials in Pi or in the environment available to Rex.
+Rex starts pane children directly with `--shell=none`, without running shell startup files. Configure provider credentials in Pi or in the environment available to Rex. Children use the parent's `PI_CODING_AGENT_DIR` when it is non-empty. Children start with `PI_PROGRAM_STATUS=0` so Rex does not notify when a child finishes; the parent's own status reports are unaffected.
 
 The pane child argv follows this shape. Optional arguments appear in brackets:
 
 ```text
-/usr/bin/env PI_REX_PANES_KEEP=0|1 pi --no-session [--model m] [--thinking t] [--tools read,bash] [--append-system-prompt <file>] -e <package>/src/index.ts --rex-panes-report <file> "Task: <task>"
+/usr/bin/env PI_PROGRAM_STATUS=0 PI_REX_PANES_KEEP=0|1 PI_REX_PANES_PARENT_PID=<parent-pid> [PI_CODING_AGENT_DIR=<dir>] pi --no-session [--model m] [--thinking t] [--tools read,bash] [--append-system-prompt <file>] -e <package>/src/index.ts --rex-panes-report <file> "Task: <task>"
 ```
 
 When the parent uses a runtime and CLI script, the child reuses that invocation in place of `pi`. Each path and the complete task remain separate argv entries.
@@ -88,7 +120,7 @@ bun pm pack --dry-run
 
 ## Credits
 
-The Pi subagent example provides the tool's foundation. Pane routing and child reporting borrow ideas from `pi-subagents` and `pi-rex-subagents`, both MIT-licensed.
+The Pi subagent example provides the tool's foundation. Running each child as a live interactive Pi in Rex follows the idea behind `pi-subagents` (MIT).
 
 ## Source
 

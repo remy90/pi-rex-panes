@@ -51,7 +51,7 @@ test.each(cases)("pane branch handles %s", async (_name, kind, status, exitCode)
 	expect(result.status).toBe(status);
 	expect(result.exitCode).toBe(exitCode);
 	expect(splits).toBe(1);
-	expect(closed).toEqual(kind === "stop" || kind === "abort" ? ["child"] : []);
+	expect(closed).toEqual(kind === "abort" ? ["child"] : []);
 	if (kind === "error") expect(result.errorMessage).toBe("Provider rejected prompt");
 	if (kind === "uncertain") expect(result.errorMessage).toContain("no usable block ID");
 	if (kind === "exit") expect(result.errorMessage).toContain("before agent_settled");
@@ -78,13 +78,19 @@ test.each([false, true])("pane cleanup warning reaches parent output after task 
 		"scout", "hello", undefined, controller.signal, undefined,
 		(results) => ({ mode: "single", results, isError: false }));
 	expect(result.status).toBe(aborted ? "aborted" : "completed");
-	expect(closes).toBe(2);
+	expect(closes).toBe(aborted ? 2 : 0);
 	const warning = "Warning: Could not confirm pane unclosed-child closed. It may still be open";
-	expect(getResultOutput(result)).toStartWith(warning);
-	expect(getResultOutput({ ...result, warning: undefined }, [result])).toStartWith(warning);
+	if (aborted) {
+		expect(getResultOutput(result)).toStartWith(warning);
+		expect(getResultOutput({ ...result, warning: undefined }, [result])).toStartWith(warning);
+	} else {
+		expect(result.warning).toBeUndefined();
+		expect(getResultOutput(result)).not.toStartWith(warning);
+		expect(getResultOutput({ ...result, warning: undefined }, [result])).not.toStartWith(warning);
+	}
 });
 
-test.each(["0", "1"])("pane branch launches the documented argv with KEEP=%s", async (keep) => {
+test.each(["0", "1"])("pane branch forwards KEEP=%s and the parent PID in child argv", async (keep) => {
 	let promptFile = "";
 	let prompt = "";
 	let reportFile = "";
@@ -107,7 +113,7 @@ test.each(["0", "1"])("pane branch launches the documented argv with KEEP=%s", a
 		{ agent, available: [agent], cwd: process.cwd() }, "scout", "hello", undefined, undefined, undefined,
 		(results) => ({ mode: "single", results, isError: false }));
 	expect(result.status).toBe("completed");
-	expect(argv.slice(0, 2)).toEqual(["/usr/bin/env", `PI_REX_PANES_KEEP=${keep}`]);
+	expect(argv.slice(0, 4)).toEqual(["/usr/bin/env", "PI_PROGRAM_STATUS=0", `PI_REX_PANES_KEEP=${keep}`, `PI_REX_PANES_PARENT_PID=${process.pid}`]);
 	expect(argv.slice(argv.indexOf("--no-session"))).toEqual([
 		"--no-session", "--model", "provider/model", "--thinking", "high", "--tools", "read,bash",
 		"--append-system-prompt", promptFile, "-e", realpathSync(fileURLToPath(new URL("./index.ts", import.meta.url))),

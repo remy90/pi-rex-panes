@@ -36,8 +36,29 @@ export function createRexClient(binary: string, session: string, runner: Runner 
 		if (result.code !== 0) throw new Error(result.stderr || "Rex block listing failed");
 		return new Set(result.stdout.split(/\s+/).filter(Boolean));
 	};
+	const paneProcess = async (blockId: string, options?: { signal?: AbortSignal }): Promise<"running" | "exited" | "unknown"> => {
+		const result = await run(["block", "call", "-s", session, "-b", blockId, "process"], options);
+		options?.signal?.throwIfAborted();
+		if (result.code !== 0) return "unknown";
+		const data = JSON.parse(result.stdout);
+		if (hasExitCode(data?.last_exit)) return "exited";
+		return data?.last_exit === null ? "running" : "unknown";
+	};
 	return {
 		listPaneIds,
+		paneProcess,
+		focusPane(blockId: string) {
+			return run(["block", "focus", blockId, "-s", session]);
+		},
+		async focusedBlockId(): Promise<string | undefined> {
+			const result = await run(["api", "call", "session.view", "-s", session]);
+			if (result.code !== 0) throw new Error(result.stderr || "Rex session view failed");
+			const view = JSON.parse(result.stdout);
+			const window = Array.isArray(view?.windows)
+				? view.windows.find((window: { window_id?: unknown } | null) => window?.window_id === view.active_window_id)
+				: undefined;
+			return typeof window?.focused_block_id === "string" ? window.focused_block_id : undefined;
+		},
 		closePane(blockId: string) {
 			return run(["block", "close", blockId, "-s", session]);
 		},
@@ -57,13 +78,9 @@ export function createRexClient(binary: string, session: string, runner: Runner 
 				signal?.throwIfAborted();
 				let running = false;
 				try {
-					const result = await run(["block", "call", "-s", session, "-b", blockId, "process"], options);
-					signal?.throwIfAborted();
-					if (result.code === 0) {
-						const data = JSON.parse(result.stdout);
-						if (hasExitCode(data?.last_exit)) return;
-						running = data?.last_exit === null;
-					}
+					const state = await paneProcess(blockId, options);
+					if (state === "exited") return;
+					running = state === "running";
 				} catch { /* Keep monitoring while Rex is unavailable. */ }
 				signal?.throwIfAborted();
 				if (!running) {

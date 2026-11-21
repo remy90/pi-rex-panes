@@ -19,7 +19,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPaneTransport, type PaneTransport } from "./pane-transport.ts";
 import { buildChildArgs } from "./child-args.ts";
-import { registerReporter, REPORT_FLAG } from "./reporter.ts";
+import { registerReporter } from "./reporter.ts";
+import { foreignSubagentOwner, registerOwnership } from "./interop/ownership.ts";
+import { registerInspector } from "./interop/inspector.ts";
+import { registerAutoInspect } from "./interop/autoinspect.ts";
 import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -48,6 +51,7 @@ import {
 } from "./format.ts";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 
+const PACKAGE_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
@@ -643,14 +647,17 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
 	registerReporter(pi);
-	const panes = createPaneTransport();
-	let registered = false;
-	pi.on("session_start", () => {
-		if (pi.getFlag(REPORT_FLAG) || registered) return;
-		registered = true;
-		registerSubagent(pi, panes);
+	const settings = () => (pi.getSettings() as {
+		rexPanes?: { lingerSeconds?: unknown; autoInspect?: unknown };
+	} | undefined)?.rexPanes;
+	const panes = createPaneTransport({ settings });
+	const inspector = registerInspector(pi, { settings });
+	const autoInspect = registerAutoInspect(pi, PACKAGE_ROOT, inspector, { settings });
+	registerOwnership(pi, PACKAGE_ROOT, () => registerSubagent(pi, panes), inspector.available);
+	pi.on("session_shutdown", async () => {
+		autoInspect.shutdown();
+		await Promise.allSettled([inspector.shutdown(), panes.shutdown()]);
 	});
-	pi.on("session_shutdown", () => panes.shutdown());
 }
 
 function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
@@ -734,7 +741,7 @@ function registerSubagent(pi: ExtensionAPI, panes: PaneTransport) {
 
 	// Tool execute results cannot set runtime error state directly, so patch it through the result hook.
 	pi.on("tool_result", (event) => {
-		if (event.toolName !== "subagent") return;
+		if (event.toolName !== "subagent" || foreignSubagentOwner(pi, PACKAGE_ROOT)) return;
 		const details = event.details as SubagentDetails | undefined;
 		if (details?.isError) return { isError: true };
 	});
